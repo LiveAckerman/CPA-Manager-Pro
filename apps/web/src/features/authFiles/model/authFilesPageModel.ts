@@ -82,6 +82,52 @@ export const compareAuthFilePriority = (
   return compareAuthFileName(left, right);
 };
 
+// readAuthFileTimestampMs reads a backend-provided date field (created_at /
+// updated_at) and normalises it to a JS millisecond timestamp. Returns null
+// for missing or unparseable values so callers can sink them to the end of
+// any time-based sort rather than placing them at epoch 0.
+const readAuthFileTimestampMs = (file: AuthFileItem, key: string): number | null => {
+  const raw = (file as Record<string, unknown>)[key];
+  if (raw == null) return null;
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw)) return null;
+    return raw < 1e12 ? raw * 1000 : raw;
+  }
+  if (typeof raw === 'string') {
+    const parsed = Date.parse(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+// compareAuthFileTimestamp sorts by either created_at or updated_at. Files
+// missing the timestamp always sink to the end regardless of direction —
+// otherwise asc-sort would surface a bunch of unknowns first, which is more
+// confusing than helpful.
+export const compareAuthFileTimestamp = (
+  left: AuthFileItem,
+  right: AuthFileItem,
+  key: 'created_at' | 'updated_at',
+  direction: 'asc' | 'desc'
+) => {
+  const leftMs = readAuthFileTimestampMs(left, key);
+  const rightMs = readAuthFileTimestampMs(right, key);
+  const leftKnown = leftMs !== null;
+  const rightKnown = rightMs !== null;
+
+  if (leftKnown || rightKnown) {
+    if (!leftKnown) return 1;
+    if (!rightKnown) return -1;
+    const diff =
+      direction === 'desc'
+        ? (rightMs as number) - (leftMs as number)
+        : (leftMs as number) - (rightMs as number);
+    if (diff !== 0) return diff;
+  }
+
+  return compareAuthFileName(left, right);
+};
+
 export const stringifySearchValue = (value: unknown): string[] => {
   if (value === undefined || value === null) return [];
   if (Array.isArray(value)) return value.flatMap(stringifySearchValue);

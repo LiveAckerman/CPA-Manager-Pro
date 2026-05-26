@@ -59,6 +59,7 @@ import {
   compareAuthFileName,
   compareAuthFileNote,
   compareAuthFilePriority,
+  compareAuthFileTimestamp,
   easePower2In,
   easePower3Out,
   getAuthFilePlanSortRank,
@@ -479,6 +480,14 @@ export function AuthFilesPage() {
 
         return compareAuthFileName(a, b);
       });
+    } else if (sortMode === 'created-asc' || sortMode === 'created-desc') {
+      copy.sort((a, b) =>
+        compareAuthFileTimestamp(a, b, 'created_at', sortMode === 'created-desc' ? 'desc' : 'asc')
+      );
+    } else if (sortMode === 'updated-asc' || sortMode === 'updated-desc') {
+      copy.sort((a, b) =>
+        compareAuthFileTimestamp(a, b, 'updated_at', sortMode === 'updated-desc' ? 'desc' : 'asc')
+      );
     }
     return copy;
   }, [codexQuota, filtered, sortMode]);
