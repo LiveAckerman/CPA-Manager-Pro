@@ -791,7 +791,21 @@
     "sort_created_desc": "创建时间（最新优先）",
     "sort_created_asc": "创建时间（最早优先）",
     "sort_updated_desc": "更新时间（最近优先）",
-    "sort_updated_asc": "更新时间（最早优先）"
+    "sort_updated_asc": "更新时间（最早优先）",
+    "time_range_label": "创建时间",
+    "range_all": "全部时间",
+    "range_today": "今天",
+    "range_7d": "最近 7 天",
+    "range_14d": "最近 14 天",
+    "range_30d": "最近 30 天",
+    "range_custom": "自定义范围…",
+    "custom_range_title": "自定义时间范围",
+    "custom_range_start": "开始日期",
+    "custom_range_end": "结束日期",
+    "custom_range_apply": "应用",
+    "custom_range_cancel": "取消",
+    "custom_range_required": "请同时选择开始日期和结束日期。",
+    "custom_range_invalid": "结束日期必须不早于开始日期。"
   },
   "antigravity_quota": {
     "title": "Antigravity 额度",

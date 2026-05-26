@@ -40,6 +40,7 @@ import {
   type ResolvedTheme,
 } from '@/features/authFiles/constants';
 import { AuthFileCard } from '@/features/authFiles/components/AuthFileCard';
+import { Modal } from '@/components/ui/Modal';
 import { AuthJsonPasteModal } from '@/features/authFiles/components/AuthJsonPasteModal';
 import { AuthFileModelsModal } from '@/features/authFiles/components/AuthFileModelsModal';
 import { AuthFilesPrefixProxyEditorModal } from '@/features/authFiles/components/AuthFilesPrefixProxyEditorModal';
@@ -60,20 +61,26 @@ import {
   compareAuthFileNote,
   compareAuthFilePriority,
   compareAuthFileTimestamp,
+  computeAuthFilesRangeBounds,
   easePower2In,
   easePower3Out,
   getAuthFilePlanSortRank,
   getAuthFileSearchValues,
+  readAuthFileTimestampMs,
   stringifySearchValue,
 } from '@/features/authFiles/model/authFilesPageModel';
 import {
+  isAuthFilesTimeRange,
+  normalizeAuthFilesCustomTimeRange,
   normalizeAuthFilesSortMode,
   normalizeAuthFilesViewMode,
   readAuthFilesUiState,
   readPersistedAuthFilesCompactMode,
   writeAuthFilesUiState,
   writePersistedAuthFilesCompactMode,
+  type AuthFilesCustomTimeRange,
   type AuthFilesSortMode,
+  type AuthFilesTimeRange,
 } from '@/features/authFiles/uiState';
 import type { AuthJsonInputType } from '@/features/authFiles/sessionAuthConverter';
 import type { AuthFileItem } from '@/types';
@@ -110,6 +117,16 @@ export function AuthFilesPage() {
   const [pageSizeInput, setPageSizeInput] = useState('9');
   const [viewMode, setViewMode] = useState<'diagram' | 'list'>('list');
   const [sortMode, setSortMode] = useState<AuthFilesSortMode>('default');
+  const [timeRange, setTimeRange] = useState<AuthFilesTimeRange>('all');
+  const [customTimeRange, setCustomTimeRange] = useState<AuthFilesCustomTimeRange | null>(null);
+  const [customRangeModalOpen, setCustomRangeModalOpen] = useState(false);
+  // Snapshot of "now" used by the time-range filter. Initialised at mount
+  // and re-stamped whenever the user touches the filter (in
+  // handleTimeRangeChange and the modal-apply callback) so that presets
+  // like "last 7 days" stay relative to the user's most recent interaction
+  // without polluting the filter useMemo with an impure Date.now() call
+  // (which react-hooks/purity rightly flags).
+  const [filterNowMs, setFilterNowMs] = useState<number>(() => Date.now());
   const [batchActionBarVisible, setBatchActionBarVisible] = useState(false);
   const [uiStateHydrated, setUiStateHydrated] = useState(false);
   const [authJsonPasteOpen, setAuthJsonPasteOpen] = useState(false);
@@ -251,6 +268,19 @@ export function AuthFilesPage() {
       if (persistedViewMode) {
         setViewMode(persistedViewMode);
       }
+      const persistedCustomRange = normalizeAuthFilesCustomTimeRange(persisted.customTimeRange);
+      if (persistedCustomRange) {
+        setCustomTimeRange(persistedCustomRange);
+      }
+      if (isAuthFilesTimeRange(persisted.timeRange)) {
+        // Don't restore "custom" without a valid range — fall back to "all"
+        // so the page never boots into a stuck filter the user can't undo.
+        if (persisted.timeRange === 'custom' && !persistedCustomRange) {
+          setTimeRange('all');
+        } else {
+          setTimeRange(persisted.timeRange);
+        }
+      }
     }
 
     setUiStateHydrated(true);
@@ -272,10 +302,13 @@ export function AuthFilesPage() {
       compactPageSize: pageSizeByMode.compact,
       sortMode,
       viewMode,
+      timeRange,
+      customTimeRange: customTimeRange ?? undefined,
     });
     writePersistedAuthFilesCompactMode(compactMode);
   }, [
     compactMode,
+    customTimeRange,
     disabledOnly,
     filter,
     healthyOnly,
@@ -285,6 +318,7 @@ export function AuthFilesPage() {
     problemOnly,
     search,
     sortMode,
+    timeRange,
     uiStateHydrated,
     viewMode,
   ]);
@@ -349,6 +383,22 @@ export function AuthFilesPage() {
     [loadFiles, sortMode]
   );
 
+  const handleTimeRangeChange = useCallback((value: string) => {
+    if (!isAuthFilesTimeRange(value)) return;
+    setFilterNowMs(Date.now());
+    if (value === 'custom') {
+      // Switch the active range immediately so the dropdown reflects the
+      // user's choice, even before they confirm the dates. If they cancel
+      // without a valid custom range saved, we revert to "all" in the modal
+      // close handler — see the modal below.
+      setCustomRangeModalOpen(true);
+      setTimeRange('custom');
+    } else {
+      setTimeRange(value);
+    }
+    setPage(1);
+  }, []);
+
   const handleSavePastedAuthJson = useCallback(
     async (type: AuthJsonInputType, fileName: string, jsonText: string) => {
       await savePastedAuthJson(type, fileName, jsonText);
@@ -407,6 +457,22 @@ export function AuthFilesPage() {
       { value: 'priority-asc', label: t('auth_files.sort_priority_asc') },
       { value: 'plan-desc', label: t('auth_files.sort_plan_desc') },
       { value: 'plan-asc', label: t('auth_files.sort_plan_asc') },
+      { value: 'created-desc', label: t('auth_files.sort_created_desc') },
+      { value: 'created-asc', label: t('auth_files.sort_created_asc') },
+      { value: 'updated-desc', label: t('auth_files.sort_updated_desc') },
+      { value: 'updated-asc', label: t('auth_files.sort_updated_asc') },
+    ],
+    [t]
+  );
+
+  const timeRangeOptions = useMemo(
+    () => [
+      { value: 'all', label: t('auth_files.range_all') },
+      { value: 'today', label: t('auth_files.range_today') },
+      { value: '7d', label: t('auth_files.range_7d') },
+      { value: '14d', label: t('auth_files.range_14d') },
+      { value: '30d', label: t('auth_files.range_30d') },
+      { value: 'custom', label: t('auth_files.range_custom') },
     ],
     [t]
   );
@@ -426,6 +492,12 @@ export function AuthFilesPage() {
 
   const filtered = useMemo(() => {
     const normalizedTerm = normalizedSearch.toLowerCase();
+    // Resolve the active time-range window once per filter pass. "Now" is
+    // a snapshot (filterNowMs) — see the state declaration for why.
+    // Returns null when no time filter should apply (range='all' or
+    // custom-but-incomplete). Filters created_at because that matches the
+    // user mental model of "when this auth file was imported".
+    const rangeBounds = computeAuthFilesRangeBounds(timeRange, filterNowMs, customTimeRange);
 
     return filesMatchingStatusFilters.filter((item) => {
       const type = normalizeProviderKey(String(item.type ?? item.provider ?? ''));
@@ -440,9 +512,29 @@ export function AuthFilesPage() {
               : content.toLowerCase().includes(normalizedTerm);
           }
         );
-      return matchType && matchSearch;
+      // Files with no created_at can't satisfy any explicit range; drop them
+      // when a range is active (they remain visible under range='all').
+      let matchRange = true;
+      if (rangeBounds) {
+        const createdMs = readAuthFileTimestampMs(item, 'created_at');
+        matchRange =
+          createdMs !== null &&
+          createdMs >= rangeBounds.startMs &&
+          createdMs <= rangeBounds.endMs;
+      }
+      return matchType && matchSearch && matchRange;
     });
-  }, [codexQuota, filesMatchingStatusFilters, normalizedFilter, normalizedSearch, t, wildcardSearch]);
+  }, [
+    codexQuota,
+    customTimeRange,
+    filesMatchingStatusFilters,
+    filterNowMs,
+    normalizedFilter,
+    normalizedSearch,
+    t,
+    timeRange,
+    wildcardSearch,
+  ]);
 
   const sorted = useMemo(() => {
     const copy = [...filtered];
@@ -824,6 +916,17 @@ export function AuthFilesPage() {
                     fullWidth
                   />
                 </div>
+                <div className={styles.filterItem}>
+                  <label>{t('auth_files.time_range_label')}</label>
+                  <Select
+                    className={styles.sortSelect}
+                    value={timeRange}
+                    options={timeRangeOptions}
+                    onChange={handleTimeRangeChange}
+                    ariaLabel={t('auth_files.time_range_label')}
+                    fullWidth
+                  />
+                </div>
                 <div className={`${styles.filterItem} ${styles.filterToggleItem}`}>
                   <label>{t('auth_files.display_options_label')}</label>
                   <div className={styles.filterToggleGroup}>
@@ -1020,6 +1123,25 @@ export function AuthFilesPage() {
         onSave={handleSavePastedAuthJson}
       />
 
+      <CustomTimeRangeModal
+        open={customRangeModalOpen}
+        initialRange={customTimeRange}
+        onClose={() => {
+          setCustomRangeModalOpen(false);
+          // If the user opened the modal via the Select but never saved a
+          // valid range (or cancelled the first time), bail out of "custom"
+          // mode so the filter doesn't sit in a broken state.
+          if (!customTimeRange) setTimeRange('all');
+        }}
+        onApply={(range) => {
+          setCustomTimeRange(range);
+          setTimeRange('custom');
+          setCustomRangeModalOpen(false);
+          setFilterNowMs(Date.now());
+          setPage(1);
+        }}
+      />
+
       {batchActionBarVisible && typeof document !== 'undefined'
         ? createPortal(
             <div className={styles.batchActionContainer} ref={floatingBatchActionsRef}>
@@ -1094,6 +1216,120 @@ export function AuthFilesPage() {
             document.body
           )
         : null}
+    </div>
+  );
+}
+
+// CustomTimeRangeModal lets the user pick start/end dates for the "custom"
+// time-range filter. Kept inline because it's small, single-use, and shares
+// the same i18n namespace as the rest of AuthFilesPage.
+//
+// Inputs use type="date" (date-only, no time) — matches the granularity of
+// the created_at field for filtering purposes and avoids the timezone
+// confusion of datetime-local. Internally we expand the end date to its
+// end-of-day (23:59:59.999) so an "ending Oct 5" filter actually includes
+// auth files imported at any moment on Oct 5.
+//
+// The body is split into a separate component that's only mounted while the
+// modal is open. This lets us seed state from `initialRange` via the lazy
+// useState initialiser (no useEffect → no setState-in-effect lint warning,
+// no stale-state-on-reopen risk).
+interface CustomTimeRangeModalProps {
+  open: boolean;
+  initialRange: AuthFilesCustomTimeRange | null;
+  onClose: () => void;
+  onApply: (range: AuthFilesCustomTimeRange) => void;
+}
+
+function CustomTimeRangeModal({ open, initialRange, onClose, onApply }: CustomTimeRangeModalProps) {
+  const { t } = useTranslation();
+  return (
+    <Modal open={open} title={t('auth_files.custom_range_title')} onClose={onClose} width={420}>
+      {open ? (
+        <CustomTimeRangeModalBody
+          initialRange={initialRange}
+          onApply={onApply}
+          onClose={onClose}
+        />
+      ) : null}
+    </Modal>
+  );
+}
+
+interface CustomTimeRangeModalBodyProps {
+  initialRange: AuthFilesCustomTimeRange | null;
+  onClose: () => void;
+  onApply: (range: AuthFilesCustomTimeRange) => void;
+}
+
+const formatIsoDate = (ms: number) => {
+  const d = new Date(ms);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+function CustomTimeRangeModalBody({ initialRange, onClose, onApply }: CustomTimeRangeModalBodyProps) {
+  const { t } = useTranslation();
+  // Lazy initialiser: only computed once when this body mounts (which
+  // happens every time the modal opens). No useEffect needed.
+  const [startInput, setStartInput] = useState<string>(() =>
+    initialRange ? formatIsoDate(initialRange.startMs) : ''
+  );
+  const [endInput, setEndInput] = useState<string>(() =>
+    initialRange ? formatIsoDate(initialRange.endMs) : ''
+  );
+
+  const parsed = useMemo(() => {
+    if (!startInput || !endInput) {
+      return {
+        error: t('auth_files.custom_range_required'),
+        range: null as AuthFilesCustomTimeRange | null,
+      };
+    }
+    const startMs = new Date(`${startInput}T00:00:00`).getTime();
+    const endMs = new Date(`${endInput}T23:59:59.999`).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+      return { error: t('auth_files.custom_range_invalid'), range: null };
+    }
+    if (startMs > endMs) {
+      return { error: t('auth_files.custom_range_invalid'), range: null };
+    }
+    return { error: null as string | null, range: { startMs, endMs } };
+  }, [endInput, startInput, t]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        <span>{t('auth_files.custom_range_start')}</span>
+        <Input
+          type="date"
+          value={startInput}
+          onChange={(e) => setStartInput(e.currentTarget.value)}
+        />
+      </label>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        <span>{t('auth_files.custom_range_end')}</span>
+        <Input
+          type="date"
+          value={endInput}
+          onChange={(e) => setEndInput(e.currentTarget.value)}
+        />
+      </label>
+      {parsed.error && (
+        <div role="alert" style={{ color: 'var(--color-error, #c62828)', fontSize: '0.85em' }}>
+          {parsed.error}
+        </div>
+      )}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '8px' }}>
+        <Button variant="ghost" onClick={onClose}>
+          {t('auth_files.custom_range_cancel')}
+        </Button>
+        <Button onClick={() => parsed.range && onApply(parsed.range)} disabled={!parsed.range}>
+          {t('auth_files.custom_range_apply')}
+        </Button>
+      </div>
     </div>
   );
 }

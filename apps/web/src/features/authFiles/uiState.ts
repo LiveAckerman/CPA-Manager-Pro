@@ -18,6 +18,46 @@ export const AUTH_FILES_SORT_MODES = [
 export type AuthFilesSortMode = (typeof AUTH_FILES_SORT_MODES)[number];
 export type AuthFilesViewMode = 'diagram' | 'list';
 
+// Time-range filter on the auth-files page. Mirrors MonitoringCenterPage's
+// preset set so the two pages feel consistent, but kept as its own type so
+// the auth-files persistence schema doesn't pin to a monitoring-internal one.
+export const AUTH_FILES_TIME_RANGES = [
+  'all',
+  'today',
+  '7d',
+  '14d',
+  '30d',
+  'custom',
+] as const;
+
+export type AuthFilesTimeRange = (typeof AUTH_FILES_TIME_RANGES)[number];
+const AUTH_FILES_TIME_RANGE_SET = new Set<AuthFilesTimeRange>(AUTH_FILES_TIME_RANGES);
+
+export const isAuthFilesTimeRange = (value: unknown): value is AuthFilesTimeRange =>
+  typeof value === 'string' && AUTH_FILES_TIME_RANGE_SET.has(value as AuthFilesTimeRange);
+
+export interface AuthFilesCustomTimeRange {
+  startMs: number;
+  endMs: number;
+}
+
+export const normalizeAuthFilesCustomTimeRange = (
+  value: unknown
+): AuthFilesCustomTimeRange | null => {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Partial<AuthFilesCustomTimeRange>;
+  if (
+    typeof candidate.startMs !== 'number' ||
+    typeof candidate.endMs !== 'number' ||
+    !Number.isFinite(candidate.startMs) ||
+    !Number.isFinite(candidate.endMs) ||
+    candidate.startMs > candidate.endMs
+  ) {
+    return null;
+  }
+  return { startMs: candidate.startMs, endMs: candidate.endMs };
+};
+
 export type AuthFilesUiState = {
   filter?: string;
   problemOnly?: boolean;
@@ -31,6 +71,8 @@ export type AuthFilesUiState = {
   compactPageSize?: number;
   sortMode?: AuthFilesSortMode;
   viewMode?: AuthFilesViewMode;
+  timeRange?: AuthFilesTimeRange;
+  customTimeRange?: AuthFilesCustomTimeRange;
 };
 
 const AUTH_FILES_UI_STATE_KEY = 'authFilesPage.uiState';
