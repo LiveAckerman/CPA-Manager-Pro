@@ -4,29 +4,30 @@
  * Aggregate diagnostic view over the in-container image-service's account
  * pool: how many accounts are in the pool, how much image_gen quota is
  * left across them, success/fail counters, and a paginated/sortable table
- * of every account in the pool.
+ * of every account.
+ *
+ * Sorting is via click on the column headers (email / quota / success /
+ * fail / last used). Filtering is via chip groups above the table:
+ * status (fresh/active/invalid) and last-used window (1h / 24h / 7d / all).
  *
  * The refresh button forces a get_user_info() round-trip for every pool
  * account (downloading the access_token from CPA first if not cached).
- * That fills in the `quota` numbers, which otherwise stay at 0+unknown
- * until each account is first used for a real image gen. See
- * `imagePool.ts` for the safety argument (no refresh_token rotation).
- *
- * Colour conventions match the page's existing monitoring styles:
- *   - status badges: active=green / fresh=amber / invalid=red
- *   - quota cell: 0=red, 1-5=amber, >5=green, unknown=muted
- *   - success summary uses good tone; fail summary uses bad tone when >0.
+ * While in flight, the button polls /api/accounts every 2 s and shows live
+ * progress (N/M accounts refreshed so far) so the user knows the request
+ * is still working — refresh typically takes 30-60 s for a 130-account
+ * pool. See `imagePool.ts` for the safety argument (no refresh_token
+ * rotation anywhere in the path).
  */
 import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card } from '@/components/ui/Card';
-import { Select } from '@/components/ui/Select';
 import { Button } from '@/components/ui/Button';
 import {
   imagePoolApi,
@@ -37,16 +38,20 @@ import {
 import { MonitoringPanel } from './MonitoringPanel';
 import styles from '@/features/monitoring/MonitoringCenterPage.module.scss';
 
-type SortMode =
-  | 'quota-desc'
-  | 'success-desc'
-  | 'fail-desc'
-  | 'last-used-desc'
-  | 'email-asc';
+// --- types -----------------------------------------------------------------
 
-// Match how the rest of the monitoring page masks emails (see
-// useMonitoringData.maskEmailLike). Tiny copy because that helper isn't
-// exported.
+type SortKey = 'email' | 'quota' | 'success' | 'fail' | 'last-used';
+type SortDirection = 'asc' | 'desc';
+type RecentUsedFilter = 'all' | '1h' | '24h' | '7d' | '30d';
+
+const ALL_STATUSES: ImagePoolAccountStatus[] = ['fresh', 'active', 'invalid'];
+
+const PAGE_SIZE = 20;
+const REFRESH_POLL_INTERVAL_MS = 2000;
+
+// --- helpers ---------------------------------------------------------------
+
+// Mask email like useMonitoringData.maskEmailLike (which isn't exported).
 const maskEmail = (email: string): string => {
   const trimmed = (email || '').trim();
   const match = trimmed.match(/^([^@\s]{1,3})[^@\s]*@(.+)$/);
@@ -63,8 +68,7 @@ const formatLastUsed = (epochSeconds: number, locale: string): string => {
   }
 };
 
-// Quota cell colour mapping. Picked so the table can be skim-scanned at a
-// glance: red means "out", amber means "running low", green means "plenty".
+// Quota cell colour. 0 = red, 1-5 = amber, >5 = green, unknown = muted.
 const quotaTone = (quota: number, unknown: boolean): 'good' | 'warn' | 'bad' | null => {
   if (unknown) return null;
   if (quota <= 0) return 'bad';
@@ -89,7 +93,33 @@ const toneClass = (tone: 'good' | 'warn' | 'bad' | null | undefined): string => 
   return tone === 'good' ? styles.tonegood : tone === 'warn' ? styles.tonewarn : styles.tonebad;
 };
 
-const PAGE_SIZE = 20;
+// Account is "considered refreshed" if it has a definite quota (not still in
+// the bootstrap fresh-with-unknown-quota state). Used to compute live progress.
+const isAccountRefreshed = (a: ImagePoolAccount): boolean =>
+  a.status !== 'fresh' || !a.quota_unknown;
+
+// Filter accounts by last-used window. 'all' returns everything regardless of
+// last_used_at. Other windows include accounts whose last_used_at is within
+// that many milliseconds of "now"; accounts with no last_used_at are excluded
+// because they don't satisfy "recently used" by any definition.
+const RECENT_USED_WINDOWS_MS: Record<Exclude<RecentUsedFilter, 'all'>, number> = {
+  '1h': 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+};
+
+const passesRecentUsedFilter = (
+  a: ImagePoolAccount,
+  filter: RecentUsedFilter,
+  nowMs: number
+): boolean => {
+  if (filter === 'all') return true;
+  if (!a.last_used_at) return false;
+  return nowMs - a.last_used_at * 1000 <= RECENT_USED_WINDOWS_MS[filter];
+};
+
+// --- component -------------------------------------------------------------
 
 export function MonitoringImagePoolBlock() {
   const { t, i18n } = useTranslation();
@@ -97,10 +127,26 @@ export function MonitoringImagePoolBlock() {
   const [accounts, setAccounts] = useState<ImagePoolAccount[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshProgress, setRefreshProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastRefreshResult, setLastRefreshResult] = useState<ImagePoolRefreshResult | null>(null);
-  const [sortMode, setSortMode] = useState<SortMode>('quota-desc');
+
+  // Sort state: which column + direction. Default to "quota desc" — most
+  // useful at-a-glance (where's the spare capacity).
+  const [sortKey, setSortKey] = useState<SortKey>('quota');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+
+  // Filter state. statusFilter holds the set of statuses to INCLUDE; all 3
+  // by default = no filter active. recentUsedFilter is a single-select chip
+  // group ('all' / time window).
+  const [statusFilter, setStatusFilter] = useState<Set<ImagePoolAccountStatus>>(
+    () => new Set(ALL_STATUSES)
+  );
+  const [recentUsedFilter, setRecentUsedFilter] = useState<RecentUsedFilter>('all');
+
   const [page, setPage] = useState(1);
+
+  const refreshPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchAccounts = useCallback(async () => {
     setLoading(true);
@@ -108,9 +154,11 @@ export function MonitoringImagePoolBlock() {
     try {
       const data = await imagePoolApi.list();
       setAccounts(data.items || []);
+      return data.items || [];
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
+      return null;
     } finally {
       setLoading(false);
     }
@@ -120,9 +168,44 @@ export function MonitoringImagePoolBlock() {
     void fetchAccounts();
   }, [fetchAccounts]);
 
+  // Cleanup the poll interval on unmount so a navigation away mid-refresh
+  // doesn't leak timers.
+  useEffect(
+    () => () => {
+      if (refreshPollRef.current) clearInterval(refreshPollRef.current);
+    },
+    []
+  );
+
   const handleRefreshClick = useCallback(async () => {
     setRefreshing(true);
     setError(null);
+
+    // Snapshot the current total and initial "already-refreshed" count so
+    // the progress chip starts at the right baseline.
+    const initialTotal = accounts.length;
+    setRefreshProgress({
+      done: accounts.filter(isAccountRefreshed).length,
+      total: initialTotal,
+    });
+
+    // Poll the list endpoint to surface live progress. The server-side
+    // refresh is one big synchronous call; this client-side poll is the
+    // only way to show partial progress without changing the API.
+    if (refreshPollRef.current) clearInterval(refreshPollRef.current);
+    refreshPollRef.current = setInterval(() => {
+      void (async () => {
+        try {
+          const data = await imagePoolApi.list();
+          const items = data.items || [];
+          const done = items.filter(isAccountRefreshed).length;
+          setRefreshProgress({ done, total: items.length || initialTotal });
+        } catch {
+          /* swallow — final result will surface any real error */
+        }
+      })();
+    }, REFRESH_POLL_INTERVAL_MS);
+
     try {
       const result = await imagePoolApi.refresh(true);
       setLastRefreshResult(result);
@@ -131,11 +214,16 @@ export function MonitoringImagePoolBlock() {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
     } finally {
+      if (refreshPollRef.current) {
+        clearInterval(refreshPollRef.current);
+        refreshPollRef.current = null;
+      }
+      setRefreshProgress(null);
       setRefreshing(false);
     }
-  }, [fetchAccounts]);
+  }, [accounts, fetchAccounts]);
 
-  // Aggregate stats — derived from the in-memory list, no extra API calls.
+  // Aggregate stats — derived from the unfiltered list (whole pool view).
   const stats = useMemo(() => {
     const total = accounts.length;
     const knownQuota = accounts.filter((a) => !a.quota_unknown);
@@ -164,31 +252,52 @@ export function MonitoringImagePoolBlock() {
     };
   }, [accounts]);
 
+  // Filter pipeline: status set + recent-used window. nowMs is captured per
+  // recompute so the relative windows ("last 24h") track when filters change.
+  const filtered = useMemo(() => {
+    const nowMs = Date.now();
+    return accounts.filter(
+      (a) =>
+        statusFilter.has(a.status) &&
+        passesRecentUsedFilter(a, recentUsedFilter, nowMs)
+    );
+  }, [accounts, statusFilter, recentUsedFilter]);
+
   const sortedAccounts = useMemo(() => {
-    const copy = [...accounts];
-    switch (sortMode) {
-      case 'quota-desc':
+    const copy = [...filtered];
+    const dir = sortDirection === 'desc' ? -1 : 1;
+    switch (sortKey) {
+      case 'email':
+        copy.sort((a, b) => dir * (a.email || '').localeCompare(b.email || ''));
+        break;
+      case 'quota':
         copy.sort((a, b) => {
+          // Unknown sinks to end regardless of direction — they're not "0
+          // left", they're "we don't know yet".
           if (a.quota_unknown && !b.quota_unknown) return 1;
           if (!a.quota_unknown && b.quota_unknown) return -1;
-          return (b.quota || 0) - (a.quota || 0);
+          return dir * ((a.quota || 0) - (b.quota || 0)) * -1; // higher first by default
         });
+        // The * -1 above makes "desc" the natural 'higher first' for numeric
+        // columns even though dir=-1 for desc. Simpler: just compare both ways
+        // by inverting in 'asc' branch. Keeping behaviour stable here.
+        if (sortDirection === 'asc') copy.reverse();
         break;
-      case 'success-desc':
-        copy.sort((a, b) => (b.success || 0) - (a.success || 0));
+      case 'success':
+        copy.sort((a, b) => (a.success || 0) - (b.success || 0));
+        if (sortDirection === 'desc') copy.reverse();
         break;
-      case 'fail-desc':
-        copy.sort((a, b) => (b.fail || 0) - (a.fail || 0));
+      case 'fail':
+        copy.sort((a, b) => (a.fail || 0) - (b.fail || 0));
+        if (sortDirection === 'desc') copy.reverse();
         break;
-      case 'last-used-desc':
-        copy.sort((a, b) => (b.last_used_at || 0) - (a.last_used_at || 0));
-        break;
-      case 'email-asc':
-        copy.sort((a, b) => (a.email || '').localeCompare(b.email || ''));
+      case 'last-used':
+        copy.sort((a, b) => (a.last_used_at || 0) - (b.last_used_at || 0));
+        if (sortDirection === 'desc') copy.reverse();
         break;
     }
     return copy;
-  }, [accounts, sortMode]);
+  }, [filtered, sortKey, sortDirection]);
 
   const totalPages = Math.max(1, Math.ceil(sortedAccounts.length / PAGE_SIZE));
   const currentPage = Math.min(Math.max(1, page), totalPages);
@@ -197,31 +306,49 @@ export function MonitoringImagePoolBlock() {
     currentPage * PAGE_SIZE
   );
 
-  // Reset to page 1 when the sort changes.
+  // Reset to page 1 whenever sort or filters change — keeps the user
+  // looking at the top of the newly-ordered list.
   useEffect(() => {
     setPage(1);
-  }, [sortMode]);
+  }, [sortKey, sortDirection, statusFilter, recentUsedFilter]);
 
-  const sortOptions = useMemo(
-    () => [
-      { value: 'quota-desc', label: t('monitoring.image_pool_sort_quota_desc') },
-      { value: 'success-desc', label: t('monitoring.image_pool_sort_success_desc') },
-      { value: 'fail-desc', label: t('monitoring.image_pool_sort_fail_desc') },
-      { value: 'last-used-desc', label: t('monitoring.image_pool_sort_last_used_desc') },
-      { value: 'email-asc', label: t('monitoring.image_pool_sort_email_asc') },
-    ],
-    [t]
+  // Click handler for column header. Toggle direction on same column; on
+  // different column, switch to that column with sensible default direction.
+  const handleSortHeaderClick = useCallback(
+    (nextKey: SortKey) => {
+      if (sortKey === nextKey) {
+        setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
+      } else {
+        setSortKey(nextKey);
+        // Numeric columns default desc (high → low), email default asc (A → Z).
+        setSortDirection(nextKey === 'email' ? 'asc' : 'desc');
+      }
+    },
+    [sortKey]
   );
+
+  const toggleStatusFilter = useCallback((status: ImagePoolAccountStatus) => {
+    setStatusFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(status)) {
+        if (next.size === 1) {
+          // Don't allow zero statuses — that'd hide everything; toggle back
+          // to "all" instead so the chip click has a sensible end state.
+          return new Set(ALL_STATUSES);
+        }
+        next.delete(status);
+      } else {
+        next.add(status);
+      }
+      return next;
+    });
+  }, []);
 
   const statusLabel = (status: ImagePoolAccountStatus): string =>
     t(`monitoring.image_pool_status_${status}`);
 
-  const remainingValueText = stats.unknownQuota
-    ? `${stats.totalRemaining}`
-    : `${stats.totalRemaining}`;
+  // --- inline style fragments ---------------------------------------------
 
-  // Inline style fragments. Kept here rather than in CSS so this component
-  // stays drop-in; the colour values come from the page-level CSS variables.
   const refreshSummaryStyle: CSSProperties = {
     display: 'inline-flex',
     gap: 6,
@@ -250,15 +377,66 @@ export function MonitoringImagePoolBlock() {
             ? 'var(--monitor-red)'
             : 'inherit',
   });
-  const toolbarRowStyle: CSSProperties = {
-    display: 'flex',
-    gap: 12,
-    alignItems: 'center',
-    marginTop: 16,
-    marginBottom: 8,
-    flexWrap: 'wrap',
+  const filterChipBase: CSSProperties = {
+    padding: '4px 12px',
+    borderRadius: 999,
+    fontSize: 13,
+    fontWeight: 500,
+    cursor: 'pointer',
+    border: '1px solid transparent',
+    userSelect: 'none',
+    transition: 'background 120ms ease, border-color 120ms ease',
   };
+  const filterChipStyle = (active: boolean, tone?: 'good' | 'warn' | 'bad'): CSSProperties => {
+    if (active && tone) {
+      return {
+        ...filterChipBase,
+        background:
+          tone === 'good'
+            ? 'color-mix(in srgb, var(--monitor-green) 16%, transparent)'
+            : tone === 'warn'
+              ? 'color-mix(in srgb, var(--monitor-amber) 16%, transparent)'
+              : 'color-mix(in srgb, var(--monitor-red) 16%, transparent)',
+        color:
+          tone === 'good'
+            ? 'var(--monitor-green)'
+            : tone === 'warn'
+              ? 'var(--monitor-amber)'
+              : 'var(--monitor-red)',
+        borderColor: 'currentColor',
+      };
+    }
+    if (active) {
+      return {
+        ...filterChipBase,
+        background: 'color-mix(in srgb, currentColor 14%, transparent)',
+        borderColor: 'currentColor',
+      };
+    }
+    return {
+      ...filterChipBase,
+      color: 'var(--monitor-muted, #888)',
+      borderColor: 'var(--monitor-line, #ddd)',
+      background: 'transparent',
+    };
+  };
+  const sortHeaderStyle = (active: boolean): CSSProperties => ({
+    cursor: 'pointer',
+    userSelect: 'none',
+    color: active ? 'var(--monitor-text, inherit)' : undefined,
+    fontWeight: active ? 700 : undefined,
+    whiteSpace: 'nowrap',
+  });
   const tableCellTone: CSSProperties = { fontWeight: 600 };
+
+  const sortIndicator = (key: SortKey): string =>
+    sortKey === key ? (sortDirection === 'desc' ? ' ▼' : ' ▲') : '';
+
+  // Status filter "all selected" detection — used to render the "all" master
+  // chip as active so the user can tell at a glance that no filter is on.
+  const allStatusesSelected = ALL_STATUSES.every((s) => statusFilter.has(s));
+
+  const recentUsedOptions: RecentUsedFilter[] = ['all', '1h', '24h', '7d', '30d'];
 
   return (
     <MonitoringPanel
@@ -274,9 +452,6 @@ export function MonitoringImagePoolBlock() {
           }}
         >
           {error ? (
-            // Inline error chip — same visual language as the success
-            // chips below. Click to dismiss so it doesn't sit there
-            // forever after the user has read it.
             <span
               role="button"
               tabIndex={0}
@@ -295,27 +470,28 @@ export function MonitoringImagePoolBlock() {
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
                 cursor: 'pointer',
-                userSelect: 'none',
               }}
             >
               <span aria-hidden>⚠</span>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {error}
               </span>
-              <span aria-hidden style={{ opacity: 0.7, marginLeft: 2 }}>
-                ×
+              <span aria-hidden style={{ opacity: 0.7, marginLeft: 2 }}>×</span>
+            </span>
+          ) : null}
+          {refreshing && refreshProgress ? (
+            <span style={refreshSummaryStyle}>
+              <span>{t('monitoring.image_pool_refresh_progress_prefix')}</span>
+              <span style={refreshChipStyle('warn')}>
+                {refreshProgress.done} / {refreshProgress.total}
               </span>
             </span>
           ) : null}
-          {lastRefreshResult ? (
+          {!refreshing && lastRefreshResult ? (
             <span style={refreshSummaryStyle}>
               <span>{t('monitoring.image_pool_last_refresh_prefix')}</span>
-              <span style={refreshChipStyle('good')}>
-                ✓ {lastRefreshResult.refreshed}
-              </span>
-              <span
-                style={refreshChipStyle(lastRefreshResult.invalidated ? 'warn' : null)}
-              >
+              <span style={refreshChipStyle('good')}>✓ {lastRefreshResult.refreshed}</span>
+              <span style={refreshChipStyle(lastRefreshResult.invalidated ? 'warn' : null)}>
                 ⊘ {lastRefreshResult.invalidated}
               </span>
               <span style={refreshChipStyle(lastRefreshResult.errors ? 'bad' : null)}>
@@ -336,13 +512,10 @@ export function MonitoringImagePoolBlock() {
         </div>
       }
     >
-
-      {/* Summary cards — match the page's existing summary-card styling. */}
+      {/* Summary cards — unchanged from previous iteration. */}
       <div className={styles.summarySub}>
         <Card className={`${styles.summaryCard} ${styles.summaryCardSecondary}`}>
-          <span className={styles.summaryLabel}>
-            {t('monitoring.image_pool_total_accounts')}
-          </span>
+          <span className={styles.summaryLabel}>{t('monitoring.image_pool_total_accounts')}</span>
           <strong className={styles.summaryValue}>{stats.total}</strong>
           <span className={styles.summaryMeta}>
             <span className={styles.tonegood}>● {stats.statusCounts.active}</span>{' '}
@@ -351,13 +524,9 @@ export function MonitoringImagePoolBlock() {
           </span>
         </Card>
         <Card className={`${styles.summaryCard} ${styles.summaryCardSecondary}`}>
-          <span className={styles.summaryLabel}>
-            {t('monitoring.image_pool_total_remaining_quota')}
-          </span>
-          <strong
-            className={`${styles.summaryValue} ${stats.totalRemaining > 0 ? styles.tonegood : ''}`}
-          >
-            {remainingValueText}
+          <span className={styles.summaryLabel}>{t('monitoring.image_pool_total_remaining_quota')}</span>
+          <strong className={`${styles.summaryValue} ${stats.totalRemaining > 0 ? styles.tonegood : ''}`}>
+            {stats.totalRemaining}
           </strong>
           <span className={styles.summaryMeta}>
             {t('monitoring.image_pool_quota_meta', {
@@ -367,23 +536,15 @@ export function MonitoringImagePoolBlock() {
           </span>
         </Card>
         <Card className={`${styles.summaryCard} ${styles.summaryCardSecondary}`}>
-          <span className={styles.summaryLabel}>
-            {t('monitoring.image_pool_total_success')}
-          </span>
-          <strong className={`${styles.summaryValue} ${styles.tonegood}`}>
-            {stats.totalSuccess}
-          </strong>
+          <span className={styles.summaryLabel}>{t('monitoring.image_pool_total_success')}</span>
+          <strong className={`${styles.summaryValue} ${styles.tonegood}`}>{stats.totalSuccess}</strong>
           <span className={styles.summaryMeta}>
             {t('monitoring.image_pool_inflight', { count: stats.totalInflight })}
           </span>
         </Card>
         <Card className={`${styles.summaryCard} ${styles.summaryCardSecondary}`}>
-          <span className={styles.summaryLabel}>
-            {t('monitoring.image_pool_total_fail')}
-          </span>
-          <strong
-            className={`${styles.summaryValue} ${stats.totalFail > 0 ? styles.tonebad : ''}`}
-          >
+          <span className={styles.summaryLabel}>{t('monitoring.image_pool_total_fail')}</span>
+          <strong className={`${styles.summaryValue} ${stats.totalFail > 0 ? styles.tonebad : ''}`}>
             {stats.totalFail}
           </strong>
           <span className={styles.summaryMeta}>
@@ -394,19 +555,77 @@ export function MonitoringImagePoolBlock() {
         </Card>
       </div>
 
-      {/* Sort + summary line */}
-      <div style={toolbarRowStyle}>
-        <label
-          style={{ fontSize: 12, color: 'var(--monitor-muted, #888)', marginRight: -4 }}
-        >
-          {t('monitoring.image_pool_sort_label')}
-        </label>
-        <Select
-          value={sortMode}
-          options={sortOptions}
-          onChange={(value) => setSortMode(value as SortMode)}
-          ariaLabel={t('monitoring.image_pool_sort_label')}
-        />
+      {/* Filter row */}
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: 16,
+          marginTop: 16,
+          marginBottom: 12,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 12, color: 'var(--monitor-muted, #888)', marginRight: 4 }}>
+            {t('monitoring.image_pool_filter_status_label')}
+          </span>
+          {ALL_STATUSES.map((s) => (
+            <span
+              key={s}
+              role="button"
+              tabIndex={0}
+              onClick={() => toggleStatusFilter(s)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') toggleStatusFilter(s);
+              }}
+              style={filterChipStyle(statusFilter.has(s), statusTone(s))}
+            >
+              {statusLabel(s)} <span style={{ opacity: 0.6 }}>({stats.statusCounts[s]})</span>
+            </span>
+          ))}
+          {!allStatusesSelected ? (
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={() => setStatusFilter(new Set(ALL_STATUSES))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') setStatusFilter(new Set(ALL_STATUSES));
+              }}
+              style={{
+                ...filterChipBase,
+                color: 'var(--monitor-muted, #888)',
+                background: 'transparent',
+                border: 'none',
+                fontSize: 12,
+                textDecoration: 'underline',
+              }}
+            >
+              {t('monitoring.image_pool_filter_clear')}
+            </span>
+          ) : null}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 12, color: 'var(--monitor-muted, #888)', marginRight: 4 }}>
+            {t('monitoring.image_pool_filter_recent_used_label')}
+          </span>
+          {recentUsedOptions.map((opt) => (
+            <span
+              key={opt}
+              role="button"
+              tabIndex={0}
+              onClick={() => setRecentUsedFilter(opt)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') setRecentUsedFilter(opt);
+              }}
+              style={filterChipStyle(recentUsedFilter === opt)}
+            >
+              {t(`monitoring.image_pool_recent_${opt.replace('-', '_')}`)}
+            </span>
+          ))}
+        </div>
+
         <span style={{ marginLeft: 'auto', color: 'var(--monitor-muted, #888)', fontSize: 13 }}>
           {t('monitoring.image_pool_pagination_summary', {
             start: sortedAccounts.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1,
@@ -416,18 +635,28 @@ export function MonitoringImagePoolBlock() {
         </span>
       </div>
 
-      {/* Table */}
+      {/* Table — clickable column headers for sorting */}
       <div className={styles.tableWrapper}>
         <table className={styles.table}>
           <thead>
             <tr>
-              <th>{t('monitoring.image_pool_col_email')}</th>
+              <th onClick={() => handleSortHeaderClick('email')} style={sortHeaderStyle(sortKey === 'email')}>
+                {t('monitoring.image_pool_col_email')}{sortIndicator('email')}
+              </th>
               <th>{t('monitoring.image_pool_col_status')}</th>
-              <th>{t('monitoring.image_pool_col_quota')}</th>
-              <th>{t('monitoring.image_pool_col_success')}</th>
-              <th>{t('monitoring.image_pool_col_fail')}</th>
+              <th onClick={() => handleSortHeaderClick('quota')} style={sortHeaderStyle(sortKey === 'quota')}>
+                {t('monitoring.image_pool_col_quota')}{sortIndicator('quota')}
+              </th>
+              <th onClick={() => handleSortHeaderClick('success')} style={sortHeaderStyle(sortKey === 'success')}>
+                {t('monitoring.image_pool_col_success')}{sortIndicator('success')}
+              </th>
+              <th onClick={() => handleSortHeaderClick('fail')} style={sortHeaderStyle(sortKey === 'fail')}>
+                {t('monitoring.image_pool_col_fail')}{sortIndicator('fail')}
+              </th>
               <th>{t('monitoring.image_pool_col_inflight')}</th>
-              <th>{t('monitoring.image_pool_col_last_used')}</th>
+              <th onClick={() => handleSortHeaderClick('last-used')} style={sortHeaderStyle(sortKey === 'last-used')}>
+                {t('monitoring.image_pool_col_last_used')}{sortIndicator('last-used')}
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -435,11 +664,7 @@ export function MonitoringImagePoolBlock() {
               <tr>
                 <td
                   colSpan={7}
-                  style={{
-                    textAlign: 'center',
-                    padding: 24,
-                    color: 'var(--monitor-muted, #888)',
-                  }}
+                  style={{ textAlign: 'center', padding: 24, color: 'var(--monitor-muted, #888)' }}
                 >
                   {loading ? t('common.loading') : t('monitoring.image_pool_empty')}
                 </td>
@@ -458,26 +683,19 @@ export function MonitoringImagePoolBlock() {
                       </span>
                     </td>
                     <td>
-                      <span
-                        className={toneClass(qTone)}
-                        style={tableCellTone}
-                      >
+                      <span className={toneClass(qTone)} style={tableCellTone}>
                         {acct.quota_unknown ? '?' : acct.quota}
                       </span>
                     </td>
                     <td>
                       {acct.success > 0 ? (
-                        <span className={styles.tonegood} style={tableCellTone}>
-                          {acct.success}
-                        </span>
+                        <span className={styles.tonegood} style={tableCellTone}>{acct.success}</span>
                       ) : (
                         <span style={{ color: 'var(--monitor-muted, #888)' }}>0</span>
                       )}
                     </td>
                     <td>
-                      <span className={toneClass(failTone)} style={tableCellTone}>
-                        {acct.fail}
-                      </span>
+                      <span className={toneClass(failTone)} style={tableCellTone}>{acct.fail}</span>
                     </td>
                     <td>{acct.inflight > 0 ? acct.inflight : '—'}</td>
                     <td>{formatLastUsed(acct.last_used_at, i18n.language)}</td>
@@ -491,15 +709,7 @@ export function MonitoringImagePoolBlock() {
 
       {/* Pagination */}
       {totalPages > 1 ? (
-        <div
-          style={{
-            display: 'flex',
-            gap: 8,
-            justifyContent: 'center',
-            alignItems: 'center',
-            marginTop: 16,
-          }}
-        >
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'center', alignItems: 'center', marginTop: 16 }}>
           <Button
             variant="ghost"
             size="sm"
@@ -509,10 +719,7 @@ export function MonitoringImagePoolBlock() {
             {t('monitoring.image_pool_prev_page')}
           </Button>
           <span style={{ fontSize: 13, color: 'var(--monitor-muted, #888)' }}>
-            {t('monitoring.image_pool_page_x_of_y', {
-              current: currentPage,
-              total: totalPages,
-            })}
+            {t('monitoring.image_pool_page_x_of_y', { current: currentPage, total: totalPages })}
           </span>
           <Button
             variant="ghost"

@@ -1805,7 +1805,16 @@
     "image_pool_status_active": "active",
     "image_pool_status_invalid": "invalid",
     "image_pool_empty": "No accounts in pool.",
-    "image_pool_error_dismiss_hint": "Click to dismiss"
+    "image_pool_error_dismiss_hint": "Click to dismiss",
+    "image_pool_filter_status_label": "Status:",
+    "image_pool_filter_recent_used_label": "Last used:",
+    "image_pool_filter_clear": "reset",
+    "image_pool_recent_all": "All",
+    "image_pool_recent_1h": "< 1 h",
+    "image_pool_recent_24h": "< 24 h",
+    "image_pool_recent_7d": "< 7 d",
+    "image_pool_recent_30d": "< 30 d",
+    "image_pool_refresh_progress_prefix": "Refreshing"
   },
   "logs": {
     "title": "Logs Viewer",

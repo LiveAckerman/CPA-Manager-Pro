@@ -1830,7 +1830,16 @@
     "image_pool_status_active": "正常",
     "image_pool_status_invalid": "失效",
     "image_pool_empty": "池中尚無帳號。",
-    "image_pool_error_dismiss_hint": "點擊關閉"
+    "image_pool_error_dismiss_hint": "點擊關閉",
+    "image_pool_filter_status_label": "狀態：",
+    "image_pool_filter_recent_used_label": "最近使用：",
+    "image_pool_filter_clear": "重設",
+    "image_pool_recent_all": "全部",
+    "image_pool_recent_1h": "近 1 小時",
+    "image_pool_recent_24h": "近 24 小時",
+    "image_pool_recent_7d": "近 7 天",
+    "image_pool_recent_30d": "近 30 天",
+    "image_pool_refresh_progress_prefix": "重新整理進度"
   },
   "logs": {
     "title": "記錄檢視",

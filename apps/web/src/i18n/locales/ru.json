@@ -1801,7 +1801,16 @@
     "image_pool_status_active": "активный",
     "image_pool_status_invalid": "недейств.",
     "image_pool_empty": "Аккаунтов в пуле нет.",
-    "image_pool_error_dismiss_hint": "Нажмите, чтобы закрыть"
+    "image_pool_error_dismiss_hint": "Нажмите, чтобы закрыть",
+    "image_pool_filter_status_label": "Статус:",
+    "image_pool_filter_recent_used_label": "Использован:",
+    "image_pool_filter_clear": "сброс",
+    "image_pool_recent_all": "Все",
+    "image_pool_recent_1h": "< 1 ч",
+    "image_pool_recent_24h": "< 24 ч",
+    "image_pool_recent_7d": "< 7 дн",
+    "image_pool_recent_30d": "< 30 дн",
+    "image_pool_refresh_progress_prefix": "Прогресс"
   },
   "logs": {
     "title": "Просмотр журналов",
