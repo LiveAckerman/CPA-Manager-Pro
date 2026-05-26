@@ -46,9 +46,20 @@ export interface ImagePoolRefreshResult {
   skipped: number;
 }
 
+export interface ImagePoolRefreshStatus {
+  in_progress: boolean;
+  done?: number;
+  total?: number;
+  started_at?: number;
+}
+
 export const imagePoolApi = {
   list(): Promise<ImagePoolListResponse> {
     return apiClient.panelGet<ImagePoolListResponse>('/v0/image/accounts');
+  },
+
+  refreshStatus(): Promise<ImagePoolRefreshStatus> {
+    return apiClient.panelGet<ImagePoolRefreshStatus>('/v0/image/accounts/refresh-status');
   },
 
   /**

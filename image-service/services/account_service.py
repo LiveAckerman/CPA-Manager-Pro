@@ -130,6 +130,10 @@ class AccountService:
         self._cpa_session = requests.Session()
         self._stop_event = threading.Event()
         self._refresh_thread: threading.Thread | None = None
+        # Server-side progress for the panel's "refresh quotas" spinner.
+        # None when no refresh is running; otherwise {done, total, started_at}.
+        # Updated under self._lock from refresh_quotas().
+        self._refresh_progress: dict | None = None
 
     # ----- public API consumed by openai_backend_api + conversation -----
 
@@ -421,16 +425,37 @@ class AccountService:
                     acct.status = "active"
             return "ok"
 
-        if targets:
-            with ThreadPoolExecutor(max_workers=min(10, len(targets))) as ex:
-                for fut in as_completed({ex.submit(_refresh_one, a): a for a in targets}):
-                    outcome = fut.result()
-                    if outcome == "ok":
-                        success += 1
-                    elif outcome == "invalid":
-                        invalidated += 1
-                    elif outcome == "error":
-                        errors += 1
+        # Surface live progress so the panel's spinner can show "N / M" while
+        # this is running. Updated under the same lock that protects the
+        # account dict — callers reading via /api/accounts/refresh-status
+        # always see a consistent snapshot.
+        total = len(targets)
+        with self._lock:
+            self._refresh_progress = {
+                "done": 0,
+                "total": total,
+                "started_at": time.time(),
+            }
+
+        try:
+            if targets:
+                with ThreadPoolExecutor(max_workers=min(10, len(targets))) as ex:
+                    for fut in as_completed({ex.submit(_refresh_one, a): a for a in targets}):
+                        outcome = fut.result()
+                        if outcome == "ok":
+                            success += 1
+                        elif outcome == "invalid":
+                            invalidated += 1
+                        elif outcome == "error":
+                            errors += 1
+                        with self._lock:
+                            if self._refresh_progress is not None:
+                                self._refresh_progress["done"] = (
+                                    success + invalidated + errors
+                                )
+        finally:
+            with self._lock:
+                self._refresh_progress = None
 
         return {
             "total_accounts": len(all_accts),
@@ -441,6 +466,15 @@ class AccountService:
             "download_failed": download_failed,
             "skipped": len(all_accts) - success - invalidated - errors - download_failed,
         }
+
+    def get_refresh_progress(self) -> dict | None:
+        """Return the in-flight refresh progress snapshot, or None when no
+        refresh is currently running. Cheap — just a locked dict read."""
+        with self._lock:
+            if self._refresh_progress is None:
+                return None
+            # Return a copy so callers don't see mutations after they've read.
+            return dict(self._refresh_progress)
 
     # ----- internal helpers -----
 

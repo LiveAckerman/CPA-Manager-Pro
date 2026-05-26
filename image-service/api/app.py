@@ -51,6 +51,23 @@ def create_app() -> FastAPI:
         # what's in the pool without exposing access tokens.
         return {"items": account_service.list_accounts_redacted()}
 
+    @app.get("/api/accounts/refresh-status")
+    async def refresh_account_quotas_status():
+        # Live in-flight refresh progress, or {"in_progress": false}. Polled
+        # by the panel every 2s while the refresh button is busy so the
+        # spinner can show a real "N / M" count from the server's POV
+        # (client-side guesses don't work after the first startup refresh
+        # because every account already has status=active by then).
+        progress = account_service.get_refresh_progress()
+        if progress is None:
+            return {"in_progress": False}
+        return {
+            "in_progress": True,
+            "done": progress.get("done", 0),
+            "total": progress.get("total", 0),
+            "started_at": progress.get("started_at"),
+        }
+
     @app.post("/api/accounts/refresh")
     async def refresh_account_quotas(include_uncached: bool = True):
         # Force-refresh each pooled account's image_gen quota by hitting

@@ -93,11 +93,6 @@ const toneClass = (tone: 'good' | 'warn' | 'bad' | null | undefined): string => 
   return tone === 'good' ? styles.tonegood : tone === 'warn' ? styles.tonewarn : styles.tonebad;
 };
 
-// Account is "considered refreshed" if it has a definite quota (not still in
-// the bootstrap fresh-with-unknown-quota state). Used to compute live progress.
-const isAccountRefreshed = (a: ImagePoolAccount): boolean =>
-  a.status !== 'fresh' || !a.quota_unknown;
-
 // Filter accounts by last-used window. 'all' returns everything regardless of
 // last_used_at. Other windows include accounts whose last_used_at is within
 // that many milliseconds of "now"; accounts with no last_used_at are excluded
@@ -180,26 +175,26 @@ export function MonitoringImagePoolBlock() {
   const handleRefreshClick = useCallback(async () => {
     setRefreshing(true);
     setError(null);
+    // Initialise progress chip with 0/total so it shows immediately rather
+    // than blank for the first poll cycle.
+    setRefreshProgress({ done: 0, total: accounts.length });
 
-    // Snapshot the current total and initial "already-refreshed" count so
-    // the progress chip starts at the right baseline.
-    const initialTotal = accounts.length;
-    setRefreshProgress({
-      done: accounts.filter(isAccountRefreshed).length,
-      total: initialTotal,
-    });
-
-    // Poll the list endpoint to surface live progress. The server-side
-    // refresh is one big synchronous call; this client-side poll is the
-    // only way to show partial progress without changing the API.
+    // Poll the SERVER-side refresh-status endpoint every 2s. The image
+    // service tracks the exact count under its account-dict lock, so the
+    // panel gets a real "N / M" — client-side guesses don't work because
+    // after the startup refresh every account already has status=active,
+    // making "moved out of fresh" useless as a progress signal.
     if (refreshPollRef.current) clearInterval(refreshPollRef.current);
     refreshPollRef.current = setInterval(() => {
       void (async () => {
         try {
-          const data = await imagePoolApi.list();
-          const items = data.items || [];
-          const done = items.filter(isAccountRefreshed).length;
-          setRefreshProgress({ done, total: items.length || initialTotal });
+          const status = await imagePoolApi.refreshStatus();
+          if (status.in_progress) {
+            setRefreshProgress({
+              done: status.done ?? 0,
+              total: status.total ?? 0,
+            });
+          }
         } catch {
           /* swallow — final result will surface any real error */
         }
@@ -276,24 +271,17 @@ export function MonitoringImagePoolBlock() {
           // left", they're "we don't know yet".
           if (a.quota_unknown && !b.quota_unknown) return 1;
           if (!a.quota_unknown && b.quota_unknown) return -1;
-          return dir * ((a.quota || 0) - (b.quota || 0)) * -1; // higher first by default
+          return dir * ((a.quota || 0) - (b.quota || 0));
         });
-        // The * -1 above makes "desc" the natural 'higher first' for numeric
-        // columns even though dir=-1 for desc. Simpler: just compare both ways
-        // by inverting in 'asc' branch. Keeping behaviour stable here.
-        if (sortDirection === 'asc') copy.reverse();
         break;
       case 'success':
-        copy.sort((a, b) => (a.success || 0) - (b.success || 0));
-        if (sortDirection === 'desc') copy.reverse();
+        copy.sort((a, b) => dir * ((a.success || 0) - (b.success || 0)));
         break;
       case 'fail':
-        copy.sort((a, b) => (a.fail || 0) - (b.fail || 0));
-        if (sortDirection === 'desc') copy.reverse();
+        copy.sort((a, b) => dir * ((a.fail || 0) - (b.fail || 0)));
         break;
       case 'last-used':
-        copy.sort((a, b) => (a.last_used_at || 0) - (b.last_used_at || 0));
-        if (sortDirection === 'desc') copy.reverse();
+        copy.sort((a, b) => dir * ((a.last_used_at || 0) - (b.last_used_at || 0)));
         break;
     }
     return copy;
