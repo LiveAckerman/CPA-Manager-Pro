@@ -219,9 +219,18 @@ class AccountService:
     # ----- background refresh -----
 
     def start_background_refresh(self) -> None:
-        """Spawned from FastAPI's lifespan. Periodically re-pulls the CPA
-        file list so we discover new / disabled / refreshed accounts even
-        without traffic."""
+        """Spawned from FastAPI's lifespan. Two daemons:
+
+          1. cpa-pool-refresh — periodically re-pulls the CPA file list so
+             we discover new / disabled / refreshed accounts even without
+             traffic.
+          2. cpa-pool-startup-quota-refresh — one-shot, runs ~5s after
+             boot. Hits ChatGPT /backend-api/me for every cached account
+             so /api/accounts shows real `image_gen.remaining` numbers on
+             first panel open. Without this, every "fresh" account stays
+             quota_unknown=True until the operator clicks the manual
+             refresh button.
+        """
         if self._refresh_thread is not None:
             return
         self._stop_event.clear()
@@ -229,6 +238,34 @@ class AccountService:
             target=self._background_loop, name="cpa-pool-refresh", daemon=True,
         )
         self._refresh_thread.start()
+
+        # Separate daemon so the container becomes healthy immediately —
+        # this one runs 30-60s for ~130 accounts and we don't want
+        # /health blocked on it.
+        threading.Thread(
+            target=self._startup_quota_refresh,
+            name="cpa-pool-startup-quota-refresh",
+            daemon=True,
+        ).start()
+
+    def _startup_quota_refresh(self) -> None:
+        # Wait 5s for _background_loop's initial CPA file list pull to
+        # populate the in-memory account dict — otherwise the refresh
+        # would target zero accounts. _stop_event.wait() returns True
+        # on stop signal so we exit early during a shutdown race.
+        if self._stop_event.wait(5):
+            return
+        try:
+            result = self.refresh_quotas(tokens=None, include_uncached=True)
+            logger.info(
+                "startup quota refresh: refreshed=%s invalidated=%s errors=%s skipped=%s",
+                result.get("refreshed"),
+                result.get("invalidated"),
+                result.get("errors"),
+                result.get("skipped"),
+            )
+        except Exception as exc:
+            logger.warning("startup quota refresh failed: %s", exc)
 
     def stop_background_refresh(self) -> None:
         self._stop_event.set()
