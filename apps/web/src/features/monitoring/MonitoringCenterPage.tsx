@@ -65,6 +65,7 @@ import {
   RealtimeEventsPanel,
   RealtimeEventsPanelActions,
 } from '@/features/monitoring/components/RealtimeEventsPanel';
+import { MonitoringImagePoolBlock } from '@/features/monitoring/components/MonitoringImagePoolBlock';
 import { type AccountQuotaState } from '@/features/monitoring/components/accountOverviewPresentation';
 import {
   buildAccountOptions,
@@ -1311,6 +1312,8 @@ export function MonitoringCenterPage() {
           );
         }}
       />
+
+      <MonitoringImagePoolBlock />
 
       <MonitoringCustomRangeModal
         open={isCustomRangeModalOpen}

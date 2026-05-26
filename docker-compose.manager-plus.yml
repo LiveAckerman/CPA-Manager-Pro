@@ -1,0 +1,42 @@
+services:
+  cpa-manager-plus:
+    build:
+      context: .
+      dockerfile: Dockerfile.manager-server-plus
+      args:
+        VERSION: dev
+    image: cpa-manager-plus:dev
+    container_name: cpa-manager-plus-dev
+    restart: unless-stopped
+    ports:
+      - "18317:18317"
+    # Site-specific env (CPA URL + keys + fallback flags) lives in .env.dev.
+    # That file is gitignored; copy .env.dev.example -> .env.dev and fill in.
+    env_file:
+      - .env.dev
+    environment:
+      # manager-server (all non-secret container-internal defaults).
+      HTTP_ADDR: "0.0.0.0:18317"
+      USAGE_DB_PATH: "/data/usage.sqlite"
+      USAGE_COLLECTOR_MODE: "auto"
+      USAGE_RESP_QUEUE: "usage"
+      USAGE_RESP_POP_SIDE: "right"
+      USAGE_BATCH_SIZE: "100"
+      USAGE_POLL_INTERVAL_MS: "500"
+      USAGE_QUERY_LIMIT: "50000"
+      USAGE_CORS_ORIGINS: "*"
+      # image-service (loopback-only; cpa-manager reverse-proxies).
+      CHATGPT2API_HOST: "127.0.0.1"
+      CHATGPT2API_PORT: "8000"
+      CHATGPT2API_DATA_DIR: "/data/chatgpt2api"
+    volumes:
+      - cpa-manager-plus-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:18317/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 45s
+
+volumes:
+  cpa-manager-plus-data:

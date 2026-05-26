@@ -7,6 +7,12 @@ export const AUTH_FILES_SORT_MODES = [
   'priority-asc',
   'plan-desc',
   'plan-asc',
+  // Time-based modes: files missing the underlying timestamp field sink to
+  // the end of every direction so unknowns are visible but not surprising.
+  'created-desc',
+  'created-asc',
+  'updated-desc',
+  'updated-asc',
 ] as const;
 
 export type AuthFilesSortMode = (typeof AUTH_FILES_SORT_MODES)[number];
