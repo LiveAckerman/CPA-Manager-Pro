@@ -9,6 +9,10 @@ import {
   getTypeLabel,
   parsePriorityValue,
 } from '@/features/authFiles/constants';
+import type {
+  AuthFilesCustomTimeRange,
+  AuthFilesTimeRange,
+} from '@/features/authFiles/uiState';
 
 export const easePower3Out = (progress: number) => 1 - (1 - progress) ** 4;
 export const easePower2In = (progress: number) => progress ** 3;
@@ -86,7 +90,7 @@ export const compareAuthFilePriority = (
 // updated_at) and normalises it to a JS millisecond timestamp. Returns null
 // for missing or unparseable values so callers can sink them to the end of
 // any time-based sort rather than placing them at epoch 0.
-const readAuthFileTimestampMs = (file: AuthFileItem, key: string): number | null => {
+export const readAuthFileTimestampMs = (file: AuthFileItem, key: string): number | null => {
   const raw = (file as Record<string, unknown>)[key];
   if (raw == null) return null;
   if (typeof raw === 'number') {
@@ -126,6 +130,28 @@ export const compareAuthFileTimestamp = (
   }
 
   return compareAuthFileName(left, right);
+};
+
+// computeAuthFilesRangeBounds maps a preset / custom selection to an
+// inclusive [startMs, endMs] window. Returns null for "all" (meaning no
+// filter) and for an invalid custom range (also no filter — UI shows the
+// error separately). Mirrors the same six-bucket model used by
+// MonitoringCenterPage so the two pages feel consistent without sharing
+// state across features.
+export const computeAuthFilesRangeBounds = (
+  range: AuthFilesTimeRange,
+  nowMs: number,
+  custom: AuthFilesCustomTimeRange | null
+): { startMs: number; endMs: number } | null => {
+  if (range === 'all') return null;
+  if (range === 'custom') {
+    return custom;
+  }
+  const todayStart = new Date(nowMs);
+  todayStart.setHours(0, 0, 0, 0);
+  const dayMs = 24 * 60 * 60 * 1000;
+  const offsetDays = range === 'today' ? 0 : range === '7d' ? 6 : range === '14d' ? 13 : 29;
+  return { startMs: todayStart.getTime() - offsetDays * dayMs, endMs: nowMs };
 };
 
 export const stringifySearchValue = (value: unknown): string[] => {
