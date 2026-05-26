@@ -425,12 +425,29 @@ class AccountService:
                     acct.status = "active"
             return "ok"
 
-        # Surface live progress so the panel's spinner can show "N / M" while
-        # this is running. Updated under the same lock that protects the
-        # account dict — callers reading via /api/accounts/refresh-status
-        # always see a consistent snapshot.
+        # Single-flight guard: if a refresh is already running (e.g. the
+        # startup auto-refresh from _startup_quota_refresh has overlapped
+        # with an operator-triggered manual one), bail out immediately
+        # rather than letting two refreshes share the _refresh_progress
+        # dict and produce non-monotonic counts. The caller gets an
+        # explicit "skipped, already in progress" result.
         total = len(targets)
         with self._lock:
+            if self._refresh_progress is not None:
+                return {
+                    "total_accounts": len(all_accts),
+                    "refreshed": 0,
+                    "invalidated": 0,
+                    "errors": 0,
+                    "downloaded_from_cpa": downloaded,
+                    "download_failed": download_failed,
+                    "skipped": len(all_accts) - downloaded,
+                    "already_in_progress": True,
+                }
+            # Surface live progress so the panel's spinner can show "N / M"
+            # while this is running. Updated under the same lock that
+            # protects the account dict so callers reading via
+            # /api/accounts/refresh-status always see a consistent snapshot.
             self._refresh_progress = {
                 "done": 0,
                 "total": total,
