@@ -67,7 +67,14 @@ export const imagePoolApi = {
   refresh(includeUncached = true): Promise<ImagePoolRefreshResult> {
     return apiClient.panelPost<ImagePoolRefreshResult>(
       `/v0/image/accounts/refresh?include_uncached=${includeUncached ? 'true' : 'false'}`,
-      undefined
+      undefined,
+      // Refresh hits ChatGPT /backend-api/me once per pool account, capped
+      // at 10 concurrent workers in the Python service. For ~130 accounts
+      // it commonly runs 30-60s end-to-end, which is well over the
+      // apiClient default REQUEST_TIMEOUT_MS (30s). Bump per-call to 3 min
+      // so the button works for realistic pool sizes; the spinner gives
+      // the user feedback while it runs.
+      { timeout: 3 * 60 * 1000 }
     );
   },
 };

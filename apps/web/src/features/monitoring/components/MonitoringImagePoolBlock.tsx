@@ -273,6 +273,40 @@ export function MonitoringImagePoolBlock() {
             flexWrap: 'wrap',
           }}
         >
+          {error ? (
+            // Inline error chip — same visual language as the success
+            // chips below. Click to dismiss so it doesn't sit there
+            // forever after the user has read it.
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={() => setError(null)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') setError(null);
+              }}
+              title={`${error}\n\n${t('monitoring.image_pool_error_dismiss_hint')}`}
+              style={{
+                ...refreshChipStyle('bad'),
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                maxWidth: 360,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                cursor: 'pointer',
+                userSelect: 'none',
+              }}
+            >
+              <span aria-hidden>⚠</span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {error}
+              </span>
+              <span aria-hidden style={{ opacity: 0.7, marginLeft: 2 }}>
+                ×
+              </span>
+            </span>
+          ) : null}
           {lastRefreshResult ? (
             <span style={refreshSummaryStyle}>
               <span>{t('monitoring.image_pool_last_refresh_prefix')}</span>
@@ -302,7 +336,6 @@ export function MonitoringImagePoolBlock() {
         </div>
       }
     >
-      {error ? <div className={styles.errorBanner}>{error}</div> : null}
 
       {/* Summary cards — match the page's existing summary-card styling. */}
       <div className={styles.summarySub}>

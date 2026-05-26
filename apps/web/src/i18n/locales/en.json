@@ -1804,7 +1804,8 @@
     "image_pool_status_fresh": "fresh",
     "image_pool_status_active": "active",
     "image_pool_status_invalid": "invalid",
-    "image_pool_empty": "No accounts in pool."
+    "image_pool_empty": "No accounts in pool.",
+    "image_pool_error_dismiss_hint": "Click to dismiss"
   },
   "logs": {
     "title": "Logs Viewer",
