@@ -2316,7 +2316,7 @@
     "link_main_repo": "主程序仓库",
     "link_main_repo_desc": "CLI Proxy API 核心程序源代码",
     "link_webui_repo": "WebUI 仓库",
-    "link_webui_repo_desc": "CPA Manager Plus 前端源代码",
+    "link_webui_repo_desc": "CPA Manager Pro 前端源代码",
     "link_docs": "使用教程",
     "link_docs_desc": "配置指南和使用说明",
     "clear_login_title": "本地登录信息",

@@ -1,4 +1,4 @@
-# CPA-Manager 到 CPA Manager Plus 迁移指南
+# CPA-Manager 到 CPA Manager Pro 迁移指南
 
 本文面向从旧 `seakee/cpa-manager` / CPA-Manager 项目迁移到 `seakee/cpa-manager-plus` 的用户。目标是保留历史请求统计、模型价格、API Key 别名和已保存的 CPA 连接配置。
 
@@ -111,9 +111,9 @@ CPA_MANAGER_ADMIN_KEY='replace-with-a-long-random-admin-key' ./cpa-manager-plus
 ## 首次启动后验证
 
 1. 查看启动日志：
-   - 如果没有设置 `CPA_MANAGER_ADMIN_KEY`，保存 `CPA Manager Plus admin key generated: cmp_admin_...`。
+   - 如果没有设置 `CPA_MANAGER_ADMIN_KEY`，保存 `CPA Manager Pro admin key generated: cmp_admin_...`。
    - 确认没有 `decrypt secret`、`open sqlite`、`bootstrap manager server` 错误。
-2. 打开面板并进入「配置面板 -> CPA Manager Plus 配置」。
+2. 打开面板并进入「配置面板 -> CPA Manager Pro 配置」。
 3. 检查 CPA 地址、请求监控开关、采集模式、轮询间隔。
 4. 打开仪表盘或监控页，确认历史数据可见。
 5. 请求 `/status`，确认 collector 状态、`lastConsumedAt`、`lastInsertedAt` 和 `lastError`。

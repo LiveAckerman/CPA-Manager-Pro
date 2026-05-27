@@ -1,4 +1,4 @@
-# Migration from CPA-Manager to CPA Manager Plus
+# Migration from CPA-Manager to CPA Manager Pro
 
 This guide is for users migrating from the old `seakee/cpa-manager` / CPA-Manager project to `seakee/cpa-manager-plus`. The goal is to preserve historical usage events, model prices, API key aliases, and saved CPA connection settings.
 
@@ -111,9 +111,9 @@ If it is not set, the service generates a `cmp_admin_...` value and prints it on
 ## Validate the First Startup
 
 1. Check startup logs:
-   - If `CPA_MANAGER_ADMIN_KEY` was not set, save `CPA Manager Plus admin key generated: cmp_admin_...`.
+   - If `CPA_MANAGER_ADMIN_KEY` was not set, save `CPA Manager Pro admin key generated: cmp_admin_...`.
    - Ensure there are no `decrypt secret`, `open sqlite`, or `bootstrap manager server` errors.
-2. Open **Configuration -> CPA Manager Plus Configuration**.
+2. Open **Configuration -> CPA Manager Pro Configuration**.
 3. Verify CPA URL, request monitoring, collection mode, and polling interval.
 4. Open the dashboard or monitoring page and confirm historical data is visible.
 5. Request `/status` and check collector state, `lastConsumedAt`, `lastInsertedAt`, and `lastError`.

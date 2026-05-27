@@ -210,7 +210,7 @@ export function SystemPage() {
             </a>
 
             <a
-              href="https://github.com/seakee/CPA-Manager-Plus"
+              href="https://github.com/LiveAckerman/CPA-Manager-Pro"
               target="_blank"
               rel="noopener noreferrer"
               className={styles.linkCard}

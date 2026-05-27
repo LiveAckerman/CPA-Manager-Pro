@@ -2316,7 +2316,7 @@
     "link_main_repo": "Main Repository",
     "link_main_repo_desc": "CLI Proxy API core program source code",
     "link_webui_repo": "WebUI Repository",
-    "link_webui_repo_desc": "CPA Manager Plus frontend source code",
+    "link_webui_repo_desc": "CPA Manager Pro frontend source code",
     "link_docs": "Documentation",
     "link_docs_desc": "Configuration tutorials and guides",
     "clear_login_title": "Local Login Data",

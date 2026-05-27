@@ -1,4 +1,13 @@
-# CPA Manager Plus
+# CPA Manager Pro
+
+[![LINUX DO](https://img.shields.io/badge/LINUX%20DO-Community%20Endorsed-FFB003?style=for-the-badge&logo=discourse&logoColor=white)](https://linux.do/)
+
+> ## **⭐ This is a fork built on top of the work of two upstream authors — please consider starring their repos too:**
+>
+> - ## **https://github.com/seakee/CPA-Manager-Plus**
+> - ## **https://github.com/basketikun/chatgpt2api**
+>
+> ## **The core enhancement here is embedding chatgpt2api's "GPT Free account → 2api via browser session" capability directly into this project, so you can invoke the `gpt-image-2` image-generation model through a standard API call.**
 
 [中文文档](README_CN.md)
 
@@ -6,7 +15,7 @@ A single-file Web UI for **CLI Proxy API (CPA)** plus a **Manager Server** for p
 
 Since v6.10.0, CPA no longer includes built-in usage statistics. This project now supports usage analytics through a long-running Manager Server that consumes the CPA usage queue, persists request events to SQLite, and exposes panel-compatible usage APIs.
 
-CPA Manager Plus is the recommended successor to CPA-Manager. It combines the CPA management panel with a Docker-ready Manager Server, admin-key protected full-panel mode, encrypted CPA Management Key storage, server-backed analytics, model pricing, API key aliases, dashboard cards, and Codex account inspection.
+CPA Manager Pro is the recommended successor to CPA-Manager. It combines the CPA management panel with a Docker-ready Manager Server, admin-key protected full-panel mode, encrypted CPA Management Key storage, server-backed analytics, model pricing, API key aliases, dashboard cards, and Codex account inspection.
 
 - **CPA Main project**: https://github.com/router-for-me/CLIProxyAPI
 - **Recommended CPA version**: >= v7.1.0
@@ -33,7 +42,7 @@ CPA Manager Plus is the recommended successor to CPA-Manager. It combines the CP
 | Mode | Entry URL | What the user configures | Best for |
 |---|---|---|---|
 | Full Docker mode | `http://<host>:18317/management.html` | First startup log provides the admin key; first setup: admin key + CPA URL + CPA Management Key; later login: admin key | New deployments, one entry point, least browser/CORS complexity |
-| CPA panel mode | `http://<cpa-host>:8317/management.html` | Log in to CPA with the CPA Management Key first, then set the Manager Server URL under **Configuration -> CPA Manager Plus Configuration** | Existing CPA automatic panel loading |
+| CPA panel mode | `http://<cpa-host>:8317/management.html` | Log in to CPA with the CPA Management Key first, then set the Manager Server URL under **Configuration -> CPA Manager Pro Configuration** | Existing CPA automatic panel loading |
 | Frontend only | Vite dev server or `apps/web/dist/index.html` | CPA URL, optionally Manager Server URL | Development |
 
 Full Docker mode does not bundle CPA itself. CPA still runs as the upstream service; the Docker image provides the Manager Server plus an embedded copy of this management panel.
@@ -43,7 +52,7 @@ Full Docker mode does not bundle CPA itself. CPA still runs as the upstream serv
 Request statistics require the CPA usage queue:
 
 - CPA Management must be enabled because the usage queue uses the same availability and CPA Management Key as `/v0/management`.
-- Request monitoring requires CPA usage publishing: set `usage-statistics-enabled: true`, or submit `{ "value": true }` to `PUT /usage-statistics-enabled`. CPA Manager Plus enables this automatically when request monitoring is enabled during setup or configuration save.
+- Request monitoring requires CPA usage publishing: set `usage-statistics-enabled: true`, or submit `{ "value": true }` to `PUT /usage-statistics-enabled`. CPA Manager Pro enables this automatically when request monitoring is enabled during setup or configuration save.
 - Disabling CPAM request monitoring only stops the Manager Server collector. It does not automatically disable CPA usage publishing or clear the CPA usage queue. If CPA usage publishing remains enabled, re-enabling request monitoring within the queue retention window may collect events retained while the collector was stopped.
 - CPA `v7.1.0+` is recommended for current panel capabilities. CPA `v6.10.8+` already exposes the HTTP usage queue endpoint `/v0/management/usage-queue`, which can pass through regular HTTP reverse proxies.
 - Manager Server `auto` mode tries RESP Pub/Sub (`subscribe`) first, then the HTTP usage queue, then RESP pop mode for older CPA versions. RESP transports listen on the CPA API port, usually `8317`, and cannot pass through a regular HTTP reverse proxy.
@@ -65,7 +74,7 @@ Browser
       -> SQLite /data/usage.sqlite
 ```
 
-On first startup, if `CPA_MANAGER_ADMIN_KEY` / `CPA_MANAGER_ADMIN_KEY_FILE` is not provided, Manager Server generates a `cmp_admin_...` admin key and prints it to the startup log only once. The login page calls `GET /usage-service/info` and detects that it is hosted by Manager Server. If the response is not configured yet, it shows the setup wizard: you first enter the admin key, then the CPA URL, CPA Management Key, and choose whether to enable request monitoring. When monitoring is enabled, you also set the collector polling interval; Manager Server validates the CPA Management API, enables CPA usage publishing, checks that the poll interval does not exceed the CPA queue retention window, stores CPA Manager Plus configuration in SQLite, starts the collector with the configured mode (`auto` by default: RESP Pub/Sub, then HTTP queue, then RESP pop fallback), and serves the panel from the same origin. When monitoring is disabled, the CPA connection is still saved for Management API proxying, but CPA usage publishing and the collector stay off.
+On first startup, if `CPA_MANAGER_ADMIN_KEY` / `CPA_MANAGER_ADMIN_KEY_FILE` is not provided, Manager Server generates a `cmp_admin_...` admin key and prints it to the startup log only once. The login page calls `GET /usage-service/info` and detects that it is hosted by Manager Server. If the response is not configured yet, it shows the setup wizard: you first enter the admin key, then the CPA URL, CPA Management Key, and choose whether to enable request monitoring. When monitoring is enabled, you also set the collector polling interval; Manager Server validates the CPA Management API, enables CPA usage publishing, checks that the poll interval does not exceed the CPA queue retention window, stores CPA Manager Pro configuration in SQLite, starts the collector with the configured mode (`auto` by default: RESP Pub/Sub, then HTTP queue, then RESP pop fallback), and serves the panel from the same origin. When monitoring is disabled, the CPA connection is still saved for Management API proxying, but CPA usage publishing and the collector stay off.
 
 After Manager Server is configured, a new browser opening the same URL uses the normal login form. Full Docker mode uses the admin key as the login credential; the CPA Management Key is stored server-side and is only used by Manager Server when it talks to CPA upstream.
 
@@ -82,7 +91,7 @@ Manager Server
   -> SQLite /data/usage.sqlite
 ```
 
-Use this when CPA still auto-downloads and serves the panel. This mode is served by CPA, so it does not show the full Docker setup wizard and does not require the user to enter the Manager Server admin key inside the CPA panel. Request monitoring is optional; when Manager Server is not deployed, the panel hides the request monitoring entry and direct visits to the monitoring page show a setup hint. To use request monitoring, log in to CPA with the CPA Management Key first, deploy Manager Server separately, then open **Configuration -> CPA Manager Plus Configuration**, enable it, enter the Manager Server URL, and save. This is a subtractive version of full Docker mode: no hosted primary entry point, no initialization page, and no takeover of regular CPA management APIs.
+Use this when CPA still auto-downloads and serves the panel. This mode is served by CPA, so it does not show the full Docker setup wizard and does not require the user to enter the Manager Server admin key inside the CPA panel. Request monitoring is optional; when Manager Server is not deployed, the panel hides the request monitoring entry and direct visits to the monitoring page show a setup hint. To use request monitoring, log in to CPA with the CPA Management Key first, deploy Manager Server separately, then open **Configuration -> CPA Manager Pro Configuration**, enable it, enter the Manager Server URL, and save. This is a subtractive version of full Docker mode: no hosted primary entry point, no initialization page, and no takeover of regular CPA management APIs.
 
 ### Manager Server Backend
 
@@ -125,7 +134,7 @@ http://<host>:18317/management.html
 
 On first setup, enter:
 
-- Admin key: `CPA Manager Plus admin key generated: cmp_admin_...` from the first startup log
+- Admin key: `CPA Manager Pro admin key generated: cmp_admin_...` from the first startup log
 - CPA URL:
   - Docker Desktop host CPA: `http://host.docker.internal:8317` (default suggestion unless the panel was built with `VITE_DEFAULT_CPA_BASE_URL`)
   - Same compose network: `http://cli-proxy-api:8317`
@@ -241,7 +250,7 @@ Then enter `http://host.docker.internal:8317` as the CPA URL during first setup.
 3. In the CPA panel, go to:
 
    ```text
-   Configuration -> CPA Manager Plus Configuration
+   Configuration -> CPA Manager Pro Configuration
    ```
 
 4. Enable it and enter:
@@ -250,7 +259,7 @@ Then enter `http://host.docker.internal:8317` as the CPA URL during first setup.
    http://<manager-server-host>:18317
    ```
 
-5. Save the CPA Manager Plus configuration.
+5. Save the CPA Manager Pro configuration.
 
 The panel sends the current CPA URL and CPA Management Key to the Manager Server. After that, monitoring reads usage data from the Manager Server while other management calls continue to use CPA. In this external mode, Manager Server endpoints accept the CPA Management Key for compatibility; full Docker mode still uses the admin key.
 
@@ -264,7 +273,7 @@ This builds the React panel and embeds it into the Go Manager Server binary.
 
 ## Manager Server Configuration
 
-Most users can configure CPA URL, CPA Management Key, request monitoring enablement, collection mode, and polling interval from **Configuration -> CPA Manager Plus Configuration**. CPA Manager Plus configuration is persisted in SQLite. Environment variables are mainly for first bootstrap and unattended deployments.
+Most users can configure CPA URL, CPA Management Key, request monitoring enablement, collection mode, and polling interval from **Configuration -> CPA Manager Pro Configuration**. CPA Manager Pro configuration is persisted in SQLite. Environment variables are mainly for first bootstrap and unattended deployments.
 
 The variables below are Manager Server runtime settings. Frontend build-time settings are separate: `VITE_DEFAULT_CPA_BASE_URL` sets the default CPA URL shown by the Manager Server-hosted first setup wizard. When it is not set, the Docker-hosted panel suggests `http://host.docker.internal:8317`.
 
@@ -303,18 +312,18 @@ Startup configuration precedence is: environment variables > `config.json` > pro
 
 If `CPA_MANAGER_ADMIN_KEY` is set, the service initializes the admin credential from that value and does not log a generated admin key. If `CPA_UPSTREAM_URL` and `CPA_MANAGEMENT_KEY` are set, collection starts automatically on boot and the connection is shown as environment-managed in the panel. Otherwise, use the full Docker setup flow; the result is saved to SQLite `settings.manager_config_v1`. The legacy `settings.setup` value is still written for compatibility and rollback.
 
-### CPA vs CPA Manager Plus Configuration Boundary
+### CPA vs CPA Manager Pro Configuration Boundary
 
 - **CPA configuration**: `usage-statistics-enabled`, `redis-usage-queue-retention-seconds`, proxy, logging, routing, auth files, and related fields still belong to CPA and are managed by `/config` / `/config.yaml`.
-- **CPA Manager Plus configuration**: CPA URL, CPA Management Key, request monitoring enablement, Manager Server collection mode, `pollIntervalMs`, `batchSize`, `queryLimit`, and the CPA panel mode Manager Server bootstrap URL are persisted in Manager Server SQLite.
-- The configuration panel shows CPA and CPA Manager Plus settings separately. Saving CPAM settings does not write to CPA `config.yaml`; enabling request monitoring calls CPA Management API to enable usage publishing, while disabling request monitoring only stops the CPAM collector.
+- **CPA Manager Pro configuration**: CPA URL, CPA Management Key, request monitoring enablement, Manager Server collection mode, `pollIntervalMs`, `batchSize`, `queryLimit`, and the CPA panel mode Manager Server bootstrap URL are persisted in Manager Server SQLite.
+- The configuration panel shows CPA and CPA Manager Pro settings separately. Saving CPAM settings does not write to CPA `config.yaml`; enabling request monitoring calls CPA Management API to enable usage publishing, while disabling request monitoring only stops the CPAM collector.
 
 ### Migration Guide
 
 When upgrading from the old CPA-Manager project, read [Migration from CPA-Manager](docs/migration-from-cpa-manager.md) first. The core rules are:
 
 1. Stop the old backend service before backup, then back up the old `/data` directory or Docker volume, including at least `usage.sqlite`, `usage.sqlite-wal`, and `usage.sqlite-shm`.
-2. Start CPA Manager Plus with the same old `/data` volume, or copy the old data into the new `/data`. The old project often used `cpa-manager-data`; the Plus examples use `cpa-manager-plus-data`. Do not accidentally start with an empty new volume.
+2. Start CPA Manager Pro with the same old `/data` volume, or copy the old data into the new `/data`. The old project often used `cpa-manager-data`; the Plus examples use `cpa-manager-plus-data`. Do not accidentally start with an empty new volume.
 3. On first Plus startup, the service adds `settings.admin_credential_v1`, `settings.bootstrap_state_v1`, and `/data/data.key`. From this point forward, backups must include both SQLite files and `data.key`.
 4. Full Docker mode now logs in with the Manager Server admin key, not the CPA Management Key. Prefer setting `CPA_MANAGER_ADMIN_KEY` or `CPA_MANAGER_ADMIN_KEY_FILE` during migration; otherwise save the generated `cmp_admin_...` value from the first startup log.
 5. If an older version already saved CPA URL and CPA Management Key through `/setup`, the service migrates from `settings.setup` to `settings.manager_config_v1` and rewrites the old plaintext CPA Management Key as encrypted storage during startup migration.
@@ -342,8 +351,8 @@ When upgrading from the old CPA-Manager project, read [Migration from CPA-Manage
 | `GET /health` | Basic health check |
 | `GET /status` | Collector, SQLite, event count, and error status |
 | `GET /usage-service/info` | Allows the frontend to detect full Docker mode and read `configured` for setup vs login flow |
-| `GET /usage-service/config` | Reads persistent CPA Manager Plus configuration and CPA usage publishing status |
-| `PUT /usage-service/config` | Saves CPA Manager Plus configuration and restarts the collector when needed |
+| `GET /usage-service/config` | Reads persistent CPA Manager Pro configuration and CPA usage publishing status |
+| `PUT /usage-service/config` | Saves CPA Manager Pro configuration and restarts the collector when needed |
 | `POST /setup` | Protected by the admin key; saves CPA URL + CPA Management Key and starts collection |
 | `GET /v0/management/usage` | Compatible usage payload for the panel |
 | `GET /v0/management/usage/export` | Export usage events as JSONL |
@@ -361,7 +370,7 @@ Usage import accepts two file families: JSONL/NDJSON event files exported by Man
 ## Feature Overview
 
 - **Dashboard**: connection state, backend version, quick health summary
-- **Configuration**: visual/source editing for CPA configuration and separate CPA Manager Plus configuration
+- **Configuration**: visual/source editing for CPA configuration and separate CPA Manager Pro configuration
 - **AI Providers**: Gemini, Codex, Claude, Vertex, OpenAI-compatible providers, and Ampcode
 - **Auth Files**: upload, download, delete, status, OAuth exclusions, model aliases
 - **Quota**: quota views for supported providers
@@ -419,7 +428,7 @@ go run ./cmd/cpa-manager-plus
 - **Data disappears after container rebuild**: mount `/data` to a Docker volume or host directory.
 - **Old data is missing after migrating from CPA-Manager**: verify that the Plus container is mounting the old `/data` volume, not a newly created empty `cpa-manager-plus-data` volume.
 - **Admin key is lost**: setting `CPA_MANAGER_ADMIN_KEY` does not overwrite an existing `settings.admin_credential_v1`. Follow the offline recovery steps in the migration guide after backing up `/data`.
-- **Detailed FAQ**: see [FAQ and Troubleshooting](https://github.com/seakee/CPA-Manager-Plus/wiki/CPA-Manager-Plus-FAQ-and-Troubleshooting) or the [Chinese FAQ](https://github.com/seakee/CPA-Manager-Plus/wiki/CPA%E2%80%90Manager-%E5%B8%B8%E8%A7%81%E9%97%AE%E9%A2%98%E4%B8%8E%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88).
+- **Detailed FAQ**: see [FAQ and Troubleshooting](https://github.com/LiveAckerman/CPA-Manager-Pro/wiki/FAQ-and-Troubleshooting) or the [Chinese FAQ](https://github.com/LiveAckerman/CPA-Manager-Pro/wiki/FAQ-and-Troubleshooting).
 
 ## References
 
