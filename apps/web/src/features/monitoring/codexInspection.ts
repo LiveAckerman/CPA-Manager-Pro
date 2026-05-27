@@ -104,6 +104,15 @@ export interface CodexInspectionResultItem extends CodexInspectionAccount {
   usedPercent: number | null;
   isQuota: boolean;
   error: string;
+  /**
+   * True when the safe-path probe got HTTP 401 from ChatGPT — the cached
+   * access_token is dead but we did NOT trigger an OAuth refresh grant
+   * to verify. Operators recover by re-authenticating the account in a
+   * browser and re-uploading the credential. Surfaced separately from
+   * `action: 'delete'` because the underlying ChatGPT account is often
+   * still healthy — only our cached token expired.
+   */
+  needsReauth?: boolean;
 }
 
 export interface CodexInspectionSummary {

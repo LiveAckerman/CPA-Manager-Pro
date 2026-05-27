@@ -59,6 +59,68 @@ export interface ImagePoolRefreshStatus {
   started_at?: number;
 }
 
+// --- Safe Codex usage probe ----------------------------------------------
+// Replaces the codex-inspection page's old hot path
+// (frontend → /v0/management/api-call → CPA refresh_token → ChatGPT). The
+// safe path is read-only against CPA: image-service uses the cached
+// access_token to hit chatgpt.com directly. When that token has expired,
+// the response sets needs_reauth=true and the operator is expected to
+// re-authenticate the account in a browser — we do NOT trigger an OAuth
+// refresh grant from this path, because that's what was getting accounts
+// `app_session_terminated` on free tier.
+
+export interface CodexProbeRequest {
+  /** CPA-side file name — the stable identifier image-service indexes by. */
+  fileName: string;
+  /** Optional Chatgpt-Account-Id header override (mirrors the legacy /api-call payload). */
+  chatgptAccountId?: string;
+  /** Optional User-Agent override (codex-inspection settings page lets the operator tune this). */
+  userAgent?: string;
+}
+
+export interface CodexProbeResult {
+  /** HTTP status returned by chatgpt.com /backend-api/wham/usage. 0 means we never reached ChatGPT. */
+  status_code: number;
+  /** Parsed JSON body when content-type indicated JSON; null otherwise. */
+  body: unknown;
+  /** Raw response text (capped at 8 KB server-side to avoid blowing up the JSON envelope). */
+  body_text: string;
+  has_status_code: boolean;
+  /**
+   * True when the cached access_token returned 401 from ChatGPT — i.e. the
+   * token died upstream and we'd need a fresh OAuth grant to recover.
+   * The inspection UI surfaces this as "needs re-authentication" rather
+   * than treating it as a transient error.
+   */
+  needs_reauth: boolean;
+  /** Pre-flight error (CPA download failure, network error, etc.). null on success. */
+  error: string | null;
+}
+
+export const imageProbeApi = {
+  /**
+   * Hits image-service `/api/accounts/probe-codex` via the cpa-manager
+   * reverse proxy. Replaces the old `apiCallApi.request({ url: codex
+   * usage })` pattern in the codex-inspection page, eliminating the
+   * refresh_token grant that was killing free accounts.
+   *
+   * Timeout: 30s. ChatGPT's /backend-api/wham/usage usually responds in
+   * 1-3s; image-service adds a one-time CPA file download (~100ms) when
+   * the account's token isn't cached yet.
+   */
+  probeCodex(req: CodexProbeRequest): Promise<CodexProbeResult> {
+    return apiClient.panelPost<CodexProbeResult>(
+      '/v0/image/accounts/probe-codex',
+      {
+        file_name: req.fileName,
+        chatgpt_account_id: req.chatgptAccountId,
+        user_agent: req.userAgent,
+      },
+      { timeout: 30_000 }
+    );
+  },
+};
+
 export const imagePoolApi = {
   list(): Promise<ImagePoolListResponse> {
     return apiClient.panelGet<ImagePoolListResponse>('/v0/image/accounts');

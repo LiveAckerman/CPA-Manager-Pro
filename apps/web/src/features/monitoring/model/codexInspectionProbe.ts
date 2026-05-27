@@ -228,6 +228,7 @@ export const inspectSingleAccount = async (
   }
 
   const authIndex = account.authIndex;
+  const fileName = (account.fileName || '').trim();
   const requestConfig: AxiosRequestConfig =
     settings.timeout > 0 ? { timeout: settings.timeout } : {};
 
@@ -235,6 +236,14 @@ export const inspectSingleAccount = async (
     const { result, payload } = await withRetry(settings.retries, () =>
       requestCodexUsageRaw({
         authIndex,
+        // Passing fileName routes through image-service's safe probe
+        // endpoint, which uses the cached access_token directly against
+        // ChatGPT — no refresh_token grant fires, so heavy inspection
+        // runs no longer get free accounts session_terminated. Falls
+        // back to the legacy /api-call path automatically if fileName
+        // is empty (defensive — every account from toInspectionAccount
+        // should always have fileName).
+        fileName: fileName || undefined,
         accountId: account.accountId,
         userAgent: settings.userAgent,
         requestConfig,
@@ -251,6 +260,31 @@ export const inspectSingleAccount = async (
         usedPercent: null,
         isQuota: false,
         error: '响应缺少 status_code',
+      };
+    }
+
+    // Safe-path 401: the cached access_token is dead, but the underlying
+    // ChatGPT account may still be alive — we just need a fresh OAuth
+    // login in a browser. Surface this as `action: 'keep' + needsReauth`
+    // so the operator can decide whether to re-auth or delete, instead
+    // of the legacy auto-delete-on-401 that conflated dead tokens with
+    // dead accounts.
+    if (result.needsReauth) {
+      const reauthReason =
+        '本地缓存 access_token 已过期，请在浏览器重新授权该账号';
+      onLog?.(
+        'warning',
+        `${account.displayAccount} -> reauth (HTTP 401 · 需要重新授权)`
+      );
+      return {
+        ...account,
+        action: 'keep',
+        actionReason: reauthReason,
+        statusCode: result.statusCode,
+        usedPercent: null,
+        isQuota: false,
+        error: '',
+        needsReauth: true,
       };
     }
 

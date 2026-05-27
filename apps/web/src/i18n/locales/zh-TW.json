@@ -1537,6 +1537,8 @@
     "codex_inspection_eyebrow": "Codex Account Inspection",
     "codex_inspection_title": "Codex 帳號巡檢",
     "codex_inspection_desc": "獨立檢查 Codex 帳號的額度、失效狀態與禁用恢復情況，只有在使用者確認後才會執行刪除、禁用或啟用。",
+    "codex_inspection_safe_path_title": "已啟用安全巡檢路徑 — 不會觸發 refresh_token 換發。",
+    "codex_inspection_safe_path_desc": "探測請求會透過 image-service 記憶體中已快取的 access_token 直接呼叫 ChatGPT。本地快取 token 已過期的帳號會被標記為「需要重新授權」並保留（不會自動刪除）—— 請在瀏覽器中重新登入該帳號以恢復。之前的實作走 CPA 的 refresh_token 換發路徑，導致免費帳號大量觸發 OpenAI 的 app_session_terminated。",
     "codex_inspection_back": "返回驗證檔案",
     "codex_inspection_run": "開始巡檢",
     "codex_inspection_run_local": "開始本機巡檢",

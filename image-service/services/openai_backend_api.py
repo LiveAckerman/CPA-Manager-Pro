@@ -192,6 +192,61 @@ class OpenAIBackendAPI:
         logger.debug({"event": "backend_user_info_account_payload", "account_payload": payload})
         return ((payload.get("accounts") or {}).get("default") or {}).get("account") or {}
 
+    def get_codex_usage(
+            self,
+            chatgpt_account_id: str = "",
+            user_agent: str = "",
+    ) -> Dict[str, Any]:
+        """Read-only Codex usage probe.
+
+        Hits the same endpoint codex-inspection used to go through via
+        CPA's /v0/management/api-call, but skips CPA entirely so no
+        refresh_token grant is ever issued. Returns the raw HTTP response
+        as a dict so the caller can surface status_code + body even for
+        non-2xx (429 quota exceeded, 402 quota body, etc. — those are
+        meaningful signals for the inspection, not errors).
+
+        Important: status 401 is intentionally NOT raised here as
+        InvalidAccessTokenError. The probe caller wants to KNOW about
+        401 so it can return needs_reauth=true to the frontend rather
+        than silently rotating credentials. If we raised here, the
+        callsite would have to catch+rebuild that signal anyway.
+        """
+        path = "/backend-api/wham/usage"
+        extra: Dict[str, str] = {"Content-Type": "application/json"}
+        cid = (chatgpt_account_id or "").strip()
+        if cid:
+            extra["Chatgpt-Account-Id"] = cid
+        headers = self._headers(path, extra)
+        ua = (user_agent or "").strip()
+        if ua:
+            # Override default UA only when caller passed one explicitly.
+            # codex-inspection settings carry a UA the user can tune.
+            headers["User-Agent"] = ua
+        response = self.session.get(self.base_url + path, headers=headers, timeout=30)
+        body_text = ""
+        try:
+            body_text = response.text or ""
+        except Exception:
+            body_text = ""
+        # Best-effort JSON parse; fall back to None if the body isn't JSON
+        # (e.g. an HTML challenge page from Cloudflare).
+        body_json: Any = None
+        ct = (response.headers.get("content-type") or "").lower()
+        if "json" in ct or body_text.lstrip().startswith(("{", "[")):
+            try:
+                body_json = response.json()
+            except Exception:
+                body_json = None
+        return {
+            "status_code": int(response.status_code),
+            "body": body_json,
+            # Cap body_text so a runaway HTML challenge page can't blow
+            # up the JSON response we serialise back to the caller.
+            "body_text": body_text[:8192],
+            "has_status_code": True,
+        }
+
     def get_user_info(self) -> Dict[str, Any]:
         """获取当前 token 的账号信息。"""
         if not self.access_token:

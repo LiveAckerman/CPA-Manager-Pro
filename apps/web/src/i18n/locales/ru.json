@@ -1508,6 +1508,8 @@
     "codex_inspection_eyebrow": "Codex Account Inspection",
     "codex_inspection_title": "Проверка аккаунтов Codex",
     "codex_inspection_desc": "Отдельно проверяет квоты Codex, невалидные аккаунты и восстановление отключённых аккаунтов. Удаление, отключение и включение выполняются только после подтверждения пользователя.",
+    "codex_inspection_safe_path_title": "Безопасный путь проверки включён — refresh_token не вызывается.",
+    "codex_inspection_safe_path_desc": "Зонды используют кешированный image-service access_token напрямую против ChatGPT. Аккаунты с просроченным кешем токена помечаются как «требуется повторная авторизация» и остаются (не удаляются автоматически) — авторизуйтесь заново в браузере для восстановления. Раньше эта страница проходила через grant refresh_token у CPA, что приводило к app_session_terminated у бесплатных аккаунтов.",
     "codex_inspection_back": "Назад к файлам аутентификации",
     "codex_inspection_run": "Запустить проверку",
     "codex_inspection_run_local": "Запустить локальную проверку",

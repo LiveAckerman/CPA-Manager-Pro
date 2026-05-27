@@ -312,6 +312,117 @@ class AccountService:
         """Compat shim for callers that supply an explicit token list."""
         return self.refresh_quotas(tokens=list(tokens), include_uncached=False)
 
+    def probe_codex_usage(
+        self,
+        file_name: str,
+        chatgpt_account_id: str = "",
+        user_agent: str = "",
+    ) -> dict[str, Any]:
+        """Read-only Codex usage probe for one account.
+
+        Designed to replace the codex-inspection page's old hot path:
+        old path was `frontend → cpa-manager → CPA /api-call → CPA refreshes
+        access_token via refresh_token → ChatGPT`. The refresh-token step
+        was getting many accounts session_terminated (CPA logs showed
+        800-1100 daily after heavy inspection runs). This path skips CPA
+        entirely:
+
+          1. Look up the cached access_token from the in-memory pool (or
+             download it once from CPA's auth-files/download endpoint —
+             that's a plain file fetch, NOT a refresh-token grant).
+          2. Hit ChatGPT's /backend-api/wham/usage directly with that
+             token.
+          3. On HTTP 401 (or other "this token is dead" signal), return
+             needs_reauth=true and clear the cached token. We do NOT
+             call any OAuth refresh endpoint — that's the whole point.
+             Recovery is the operator's job: re-authenticate the account
+             in a browser and re-upload the auth file via CPA.
+
+        Returns a dict matching the apiCallApi.request() response shape
+        the frontend already consumes, plus an extra `needs_reauth` flag
+        the inspection logic uses to classify accounts.
+        """
+        from services.openai_backend_api import (
+            InvalidAccessTokenError,
+            OpenAIBackendAPI,
+        )
+
+        with self._lock:
+            acct = self._accounts.get(file_name)
+        if acct is None:
+            return {
+                "status_code": 404,
+                "body": None,
+                "body_text": "",
+                "has_status_code": False,
+                "needs_reauth": False,
+                "error": f"account not found: {file_name}",
+            }
+
+        # If we don't have a cached token yet (fresh account), pull it once
+        # from CPA. This is a plain file download, NOT a refresh grant.
+        if not acct.access_token:
+            try:
+                token = self._download_token_from_cpa(acct.file_name)
+            except Exception as exc:
+                return {
+                    "status_code": 0,
+                    "body": None,
+                    "body_text": "",
+                    "has_status_code": False,
+                    "needs_reauth": False,
+                    "error": f"CPA download failed: {exc}",
+                }
+            with self._lock:
+                acct.access_token = token
+
+        try:
+            result = OpenAIBackendAPI(access_token=acct.access_token).get_codex_usage(
+                chatgpt_account_id=chatgpt_account_id,
+                user_agent=user_agent,
+            )
+        except InvalidAccessTokenError as exc:
+            # Unlikely — get_codex_usage doesn't raise 401 — but cover it
+            # anyway. Drop the bad token from memory so a follow-up probe
+            # forces a fresh download from CPA, which surfaces whatever
+            # CPA's last refresh wrote.
+            self.remove_invalid_token(acct.access_token, "probe_codex_usage")
+            return {
+                "status_code": 401,
+                "body": None,
+                "body_text": str(exc),
+                "has_status_code": True,
+                "needs_reauth": True,
+                "error": None,
+            }
+        except Exception as exc:
+            return {
+                "status_code": 0,
+                "body": None,
+                "body_text": "",
+                "has_status_code": False,
+                "needs_reauth": False,
+                "error": f"network error: {exc}",
+            }
+
+        status_code = int(result.get("status_code") or 0)
+        # 401 from the live response means OpenAI is telling us the cached
+        # access_token is dead. We DROP the token (so the next probe will
+        # re-pull from CPA) but never trigger an OAuth refresh from here.
+        # The frontend surfaces this as "needs re-authentication".
+        needs_reauth = status_code == 401
+        if needs_reauth:
+            self.remove_invalid_token(acct.access_token, "probe_codex_usage:401")
+
+        return {
+            "status_code": status_code,
+            "body": result.get("body"),
+            "body_text": result.get("body_text") or "",
+            "has_status_code": bool(result.get("has_status_code")),
+            "needs_reauth": needs_reauth,
+            "error": None,
+        }
+
     def refresh_quotas(
         self,
         tokens: list[str] | None = None,

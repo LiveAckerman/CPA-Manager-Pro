@@ -12,10 +12,25 @@ from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from api import ai
 from services.account_service import account_service
 from services.config import config
+
+
+class ProbeCodexRequest(BaseModel):
+    # CPA file name — stable identifier the image-service uses as primary
+    # key in its in-memory account pool. Frontend already has this from
+    # the auth-files list it loaded for the inspection page; passing it
+    # avoids any authIndex translation.
+    file_name: str = Field(..., min_length=1)
+    # Optional override that the original codex-inspection HTTP call set
+    # via Chatgpt-Account-Id header. Forwarded to ChatGPT as-is.
+    chatgpt_account_id: str | None = None
+    # Optional User-Agent override, mirroring the codex-inspection
+    # settings page where the operator can tune this.
+    user_agent: str | None = None
 
 
 def create_app() -> FastAPI:
@@ -82,6 +97,24 @@ def create_app() -> FastAPI:
         # what's already warm" path.
         result = await run_in_threadpool(
             account_service.refresh_quotas, None, include_uncached
+        )
+        return result
+
+    @app.post("/api/accounts/probe-codex")
+    async def probe_codex_endpoint(body: ProbeCodexRequest):
+        # Read-only Codex usage probe for codex-inspection.
+        #
+        # Replaces the old CPA `/api-call` hot path that was triggering
+        # OpenAI's `app_session_terminated` on free accounts. This route
+        # uses the in-memory access_token directly against ChatGPT — no
+        # OAuth refresh grant ever fires. See
+        # account_service.probe_codex_usage() docstring for the full
+        # safety argument and recovery story when a token is dead.
+        result = await run_in_threadpool(
+            account_service.probe_codex_usage,
+            body.file_name,
+            body.chatgpt_account_id or "",
+            body.user_agent or "",
         )
         return result
 

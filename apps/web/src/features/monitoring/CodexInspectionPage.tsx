@@ -808,6 +808,38 @@ export function CodexInspectionPage() {
     <div className={styles.page}>
       <CodexInspectionModeTabs activeMode="local" />
 
+      {/*
+        Safe-path banner: codex-inspection used to route every probe
+        through CPA's /v0/management/api-call, which made CPA refresh
+        each account's access_token via OpenAI's refresh_token grant.
+        Heavy inspection runs (1000+/day in our logs) triggered
+        `app_session_terminated` on free accounts, permanently killing
+        them. The probe path now goes through image-service's cached
+        access_token directly — zero refresh_token grants — so this
+        banner reassures the operator that running inspection is safe.
+        If an account fails with HTTP 401 we mark it "needs reauth"
+        rather than auto-deleting; the operator manually re-logs in via
+        a browser to recover.
+      */}
+      <div
+        style={{
+          background: 'var(--color-success-bg, #ecfdf5)',
+          border: '1px solid var(--color-success-border, #34d399)',
+          color: 'var(--color-success-text, #047857)',
+          padding: '10px 14px',
+          borderRadius: 8,
+          marginBottom: 16,
+          fontSize: 13,
+          lineHeight: 1.6,
+        }}
+        role="note"
+      >
+        <strong>✓ {t('monitoring.codex_inspection_safe_path_title')}</strong>
+        <div style={{ marginTop: 4, opacity: 0.9 }}>
+          {t('monitoring.codex_inspection_safe_path_desc')}
+        </div>
+      </div>
+
       <CodexInspectionStatusPanel
         inspectionSettings={inspectionSettings}
         statusTone={statusTone}

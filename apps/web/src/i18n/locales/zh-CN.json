@@ -1512,6 +1512,8 @@
     "codex_inspection_eyebrow": "Codex Account Inspection",
     "codex_inspection_title": "Codex 账号巡检",
     "codex_inspection_desc": "独立检查 Codex 账号的额度、失效状态和禁用状态，仅在用户确认后才执行删除、禁用或启用动作。",
+    "codex_inspection_safe_path_title": "已启用安全巡检路径 — 不会触发 refresh_token 换发。",
+    "codex_inspection_safe_path_desc": "探测请求会通过 image-service 内存中已缓存的 access_token 直接访问 ChatGPT。本地缓存 token 已过期的账号会被标记为「需要重新授权」并保留（不会自动删除）—— 请在浏览器中重新登录该账号以恢复。之前的实现走 CPA 的 refresh_token 换发路径，导致免费账号大量触发 OpenAI 的 app_session_terminated。",
     "codex_inspection_back": "返回认证文件",
     "codex_inspection_run": "开始巡检",
     "codex_inspection_run_local": "开始本机巡检",
