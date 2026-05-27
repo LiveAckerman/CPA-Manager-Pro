@@ -26,6 +26,7 @@ CPA Manager Pro is the recommended successor to CPA-Manager. It combines the CPA
 ![Home dashboard showing traffic overview, collector status, usage metrics, health alerts, and version information](img/home.jpg)
 ![Monitoring center showing usage analytics, realtime request events, account overview, API key breakdowns, and model cost statistics](img/monitoring.jpg)
 ![Codex account inspection showing probe progress, account status, cleanup recommendations, and execution logs](img/codex-inspection.png)
+![Image pool quota panel showing aggregated image-service account pool: account totals, remaining quota, status filters, and per-account success/fail/in-flight breakdowns](img/image-pool.png)
 
 ## What This Provides
 

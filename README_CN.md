@@ -26,6 +26,7 @@ CPA Manager Pro 是 CPA-Manager 的推荐后续版本。它把 CPA 管理面板�
 ![首页仪表盘，展示流量概览、采集器状态、用量指标、健康提醒和版本信息](img/home.jpg)
 ![监控中心，展示用量分析、实时请求事件、账号汇总、API Key 拆解和模型费用统计](img/monitoring.jpg)
 ![Codex 账号巡检，展示探测进度、账号状态、清理建议和执行日志](img/codex-inspection.png)
+![图片号池配额面板，展示容器内 image-service 账号池总览：账号总数、剩余生图额度、状态筛选，以及逐账号成功 / 失败 / 进行中明细](img/image-pool.png)
 
 ## 提供什么
 
