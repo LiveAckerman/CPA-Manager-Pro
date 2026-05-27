@@ -586,7 +586,43 @@ class AccountService:
         return token
 
     def _pick_locked(self) -> _AccountState | None:
-        """Lock-held; picks the best account or returns None."""
+        """Lock-held; picks the best account or returns None.
+
+        Before applying the eligibility filter, sweep accounts whose
+        `inflight` slot was incremented but never released. This happens
+        when a worker dies (SIGKILL / OOM / container restart / abandoned
+        SSH) between get_available_access_token() and mark_image_result()
+        / release_image_slot(). Without this, even one orphaned slot per
+        account permanently shrinks the usable pool — observed in
+        production when paragen feasibility tests were killed mid-poll,
+        leaving 51 phantom slots that needed an image-service restart to
+        clear.
+
+        Reaping at pick-time (lazy) instead of via a background thread
+        keeps the fix simple and lock-free: every selector pass naturally
+        gets a chance to recover stuck slots. Cost is one wall-clock
+        comparison per account; negligible at pool sizes <10K.
+        """
+        now = time.time()
+        reap_after = max(60, int(config.image_inflight_reap_after_secs))
+        reaped = 0
+        for acct in self._accounts.values():
+            if acct.inflight > 0 and (now - acct.last_used_at) > reap_after:
+                logger.warning({
+                    "event": "inflight_reaped",
+                    "file_name": acct.file_name,
+                    "email": acct.email,
+                    "inflight_was": acct.inflight,
+                    "idle_secs": int(now - acct.last_used_at),
+                })
+                acct.inflight = 0
+                acct.in_use = False
+                reaped += 1
+        if reaped:
+            # Some slots came back; wake any waiters in case they were
+            # blocked on the (now-stale) inflight ceiling.
+            self._cond.notify_all()
+
         max_inflight = max(1, config.image_account_concurrency)
         eligible = [
             a for a in self._accounts.values()

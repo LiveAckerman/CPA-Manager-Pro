@@ -1818,6 +1818,7 @@
     "image_pool_status_fresh": "未刷新",
     "image_pool_status_active": "正常",
     "image_pool_status_invalid": "失效",
+    "image_pool_status_disabled": "禁用",
     "image_pool_empty": "号池暂无账号。",
     "image_pool_error_dismiss_hint": "点击关闭",
     "image_pool_filter_status_label": "状态：",

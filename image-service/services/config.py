@@ -44,6 +44,13 @@ class _Config:
     image_poll_interval_secs: float = _env_float("IMAGE_POLL_INTERVAL_SECS", 10.0)
     image_poll_initial_wait_secs: float = _env_float("IMAGE_POLL_INITIAL_WAIT_SECS", 10.0)
     image_account_concurrency: int = _env_int("IMAGE_ACCOUNT_CONCURRENCY", 3)
+    # If an account's inflight counter has been >0 for longer than this many
+    # seconds without progress, assume the holding worker died (OOM kill,
+    # SIGKILL, network half-close, etc.) and reclaim the slot. Generous
+    # default because a healthy image-gen takes 40-90s and we want the reaper
+    # to ONLY catch stuck calls, never preempt a slow-but-alive one. Set
+    # >= 2 * image_poll_timeout_secs to be safe.
+    image_inflight_reap_after_secs: int = _env_int("IMAGE_INFLIGHT_REAP_AFTER_SECS", 600)
 
     # ---- account pool refresh cadence (in minutes; consumed by
     #      account_service's background refresher) ----

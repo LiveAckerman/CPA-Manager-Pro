@@ -9,7 +9,13 @@
 
 import { apiClient } from './client';
 
-export type ImagePoolAccountStatus = 'fresh' | 'active' | 'invalid';
+// `disabled` is set by the image-service when CPA reports the underlying
+// auth file as `disabled` (user toggled off) or `unavailable` (CPA's own
+// probe couldn't validate the credential, typically because the OpenAI
+// refresh-token endpoint returned `app_session_terminated`). The pool
+// selector treats `disabled` as ineligible until CPA clears the flag —
+// usually requires re-authenticating the account in a browser.
+export type ImagePoolAccountStatus = 'fresh' | 'active' | 'invalid' | 'disabled';
 
 export interface ImagePoolAccount {
   /** CPA-side file name (e.g. "codex-x@y.com-free.json") — stable identifier. */

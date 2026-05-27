@@ -1814,6 +1814,7 @@
     "image_pool_status_fresh": "не обновл.",
     "image_pool_status_active": "активный",
     "image_pool_status_invalid": "недейств.",
+    "image_pool_status_disabled": "отключён",
     "image_pool_empty": "Аккаунтов в пуле нет.",
     "image_pool_error_dismiss_hint": "Нажмите, чтобы закрыть",
     "image_pool_filter_status_label": "Статус:",

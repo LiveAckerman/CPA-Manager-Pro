@@ -44,7 +44,10 @@ type SortKey = 'email' | 'quota' | 'success' | 'fail' | 'last-used';
 type SortDirection = 'asc' | 'desc';
 type RecentUsedFilter = 'all' | '1h' | '24h' | '7d' | '30d';
 
-const ALL_STATUSES: ImagePoolAccountStatus[] = ['fresh', 'active', 'invalid'];
+// Order matters — chips render left to right in this order. Put `active`
+// first (most common healthy state), `disabled` last (operator action
+// needed: re-auth or delete the account).
+const ALL_STATUSES: ImagePoolAccountStatus[] = ['fresh', 'active', 'invalid', 'disabled'];
 
 const PAGE_SIZE = 20;
 const REFRESH_POLL_INTERVAL_MS = 2000;
@@ -82,6 +85,11 @@ const statusTone = (status: ImagePoolAccountStatus): 'good' | 'warn' | 'bad' => 
       return 'good';
     case 'fresh':
       return 'warn';
+    case 'disabled':
+      // CPA marked it unavailable (e.g. refresh_token died with
+      // app_session_terminated). Render with the same "bad" tone as
+      // invalid — they're both unusable until manually intervened.
+      return 'bad';
     case 'invalid':
     default:
       return 'bad';
@@ -231,6 +239,7 @@ export function MonitoringImagePoolBlock() {
       fresh: 0,
       active: 0,
       invalid: 0,
+      disabled: 0,
     };
     accounts.forEach((a) => {
       if (a.status in statusCounts) statusCounts[a.status]++;
@@ -508,7 +517,14 @@ export function MonitoringImagePoolBlock() {
           <span className={styles.summaryMeta}>
             <span className={styles.tonegood}>● {stats.statusCounts.active}</span>{' '}
             <span className={styles.tonewarn}>● {stats.statusCounts.fresh}</span>{' '}
-            <span className={styles.tonebad}>● {stats.statusCounts.invalid}</span>
+            <span className={styles.tonebad}>● {stats.statusCounts.invalid}</span>{' '}
+            {/* disabled rendered with a muted dot to distinguish "CPA marked
+                unavailable / needs re-auth" from the harder-failure "invalid
+                token". Both reduce usable pool, but disabled is recoverable
+                (re-login) while invalid is usually terminal. */}
+            <span style={{ color: 'var(--monitor-muted, #888)' }}>
+              ● {stats.statusCounts.disabled}
+            </span>
           </span>
         </Card>
         <Card className={`${styles.summaryCard} ${styles.summaryCardSecondary}`}>

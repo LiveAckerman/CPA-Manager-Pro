@@ -1843,6 +1843,7 @@
     "image_pool_status_fresh": "未重新整理",
     "image_pool_status_active": "正常",
     "image_pool_status_invalid": "失效",
+    "image_pool_status_disabled": "停用",
     "image_pool_empty": "池中尚無帳號。",
     "image_pool_error_dismiss_hint": "點擊關閉",
     "image_pool_filter_status_label": "狀態：",
