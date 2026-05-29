@@ -426,6 +426,15 @@ class AccountService:
         needs_reauth = status_code == 401
         if needs_reauth:
             self.remove_invalid_token(token, "probe_codex_usage:401")
+        elif status_code and 200 <= status_code < 300:
+            # Probe succeeded with this token, so the account is healthy.
+            # Clear any stale "invalid" / "fresh" label and cache the
+            # working token so the panel stops showing a phantom 失效.
+            with self._lock:
+                if acct.status in ("fresh", "invalid"):
+                    acct.status = "active"
+                if token:
+                    acct.access_token = token
 
         return {
             "status_code": status_code,
@@ -544,8 +553,15 @@ class AccountService:
             with self._lock:
                 acct.quota = remaining
                 acct.quota_unknown = unknown
-                # Promote from "fresh" once we've successfully heard back.
-                if acct.status == "fresh":
+                # Promote to "active" once ChatGPT answers successfully.
+                # Crucially this also clears a stale "invalid" label: an
+                # account gets marked invalid when its CACHED token 401s,
+                # but include_uncached re-downloads a fresh token from CPA
+                # first — so if that fresh token now works, the account is
+                # healthy and must not keep showing as 失效 in the panel.
+                # (Only "disabled" is left untouched — that's CPA's call,
+                # set from the auth-file unavailable/disabled flag.)
+                if acct.status in ("fresh", "invalid"):
                     acct.status = "active"
             return "ok"
 
