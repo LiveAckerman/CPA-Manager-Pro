@@ -263,23 +263,43 @@ export const inspectSingleAccount = async (
       };
     }
 
-    // Safe-path 401: the cached access_token is dead, but the underlying
-    // ChatGPT account may still be alive — we just need a fresh OAuth
-    // login in a browser. Surface this as `action: 'keep' + needsReauth`
-    // so the operator can decide whether to re-auth or delete, instead
-    // of the legacy auto-delete-on-401 that conflated dead tokens with
-    // dead accounts.
+    // Safe-path 401 = authoritative "dead account". image-service only
+    // returns needs_reauth after it ALREADY re-downloaded a fresh token
+    // from CPA and that fresh token ALSO 401'd — meaning the underlying
+    // refresh_token is revoked (OpenAI app_session_terminated). The
+    // account cannot be recovered without a full browser re-login + auth
+    // file re-import, so flag it as actionable.
+    //
+    // We surface this as `delete` (it shows up in the 建议删除 bucket so
+    // the operator can batch-clear dead files) while keeping needsReauth
+    // set so the reason text explains it's a re-auth situation, not a
+    // quota/policy failure. If the account is already disabled, keep it —
+    // no point deleting something the operator already parked.
     if (result.needsReauth) {
-      const reauthReason =
-        '本地缓存 access_token 已过期，请在浏览器重新授权该账号';
+      if (account.disabled) {
+        onLog?.(
+          'info',
+          `${account.displayAccount} -> keep (认证失效，但账号已禁用)`
+        );
+        return {
+          ...account,
+          action: 'keep',
+          actionReason: '认证已失效（需重新登录），但账号已禁用',
+          statusCode: result.statusCode,
+          usedPercent: null,
+          isQuota: false,
+          error: '',
+          needsReauth: true,
+        };
+      }
       onLog?.(
-        'warning',
-        `${account.displayAccount} -> reauth (HTTP 401 · 需要重新授权)`
+        'error',
+        `${account.displayAccount} -> delete (HTTP 401 · 认证已失效，需重新登录)`
       );
       return {
         ...account,
-        action: 'keep',
-        actionReason: reauthReason,
+        action: 'delete',
+        actionReason: '认证已失效：CPA 重新下载 token 后仍返回 401，需在浏览器重新登录并重新导入，建议删除',
         statusCode: result.statusCode,
         usedPercent: null,
         isQuota: false,

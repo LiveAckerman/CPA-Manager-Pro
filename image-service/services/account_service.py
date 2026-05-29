@@ -359,66 +359,79 @@ class AccountService:
                 "error": f"account not found: {file_name}",
             }
 
-        # If we don't have a cached token yet (fresh account), pull it once
-        # from CPA. This is a plain file download, NOT a refresh grant.
-        if not acct.access_token:
+        def _download() -> str | None:
             try:
-                token = self._download_token_from_cpa(acct.file_name)
-            except Exception as exc:
-                return {
-                    "status_code": 0,
-                    "body": None,
-                    "body_text": "",
-                    "has_status_code": False,
-                    "needs_reauth": False,
-                    "error": f"CPA download failed: {exc}",
-                }
+                tok = self._download_token_from_cpa(acct.file_name)
+            except Exception:
+                return None
             with self._lock:
-                acct.access_token = token
+                acct.access_token = tok
+            return tok
 
-        try:
-            result = OpenAIBackendAPI(access_token=acct.access_token).get_codex_usage(
-                chatgpt_account_id=chatgpt_account_id,
-                user_agent=user_agent,
-            )
-        except InvalidAccessTokenError as exc:
-            # Unlikely — get_codex_usage doesn't raise 401 — but cover it
-            # anyway. Drop the bad token from memory so a follow-up probe
-            # forces a fresh download from CPA, which surfaces whatever
-            # CPA's last refresh wrote.
-            self.remove_invalid_token(acct.access_token, "probe_codex_usage")
+        def _probe_once(token: str) -> dict[str, Any] | None:
+            """Returns the raw get_codex_usage dict, or None on network error."""
+            try:
+                return OpenAIBackendAPI(access_token=token).get_codex_usage(
+                    chatgpt_account_id=chatgpt_account_id,
+                    user_agent=user_agent,
+                )
+            except InvalidAccessTokenError:
+                return {"status_code": 401, "body": None, "body_text": "", "has_status_code": True}
+            except Exception as exc:
+                return {"_network_error": str(exc)}
+
+        # --- Attempt 1: use the cached token, or download once if missing ---
+        token = acct.access_token
+        freshly_downloaded = False
+        if not token:
+            token = _download()
+            freshly_downloaded = True
+            if not token:
+                return {
+                    "status_code": 0, "body": None, "body_text": "",
+                    "has_status_code": False, "needs_reauth": False,
+                    "error": "CPA download failed",
+                }
+
+        result = _probe_once(token)
+        if result is not None and result.get("_network_error"):
             return {
-                "status_code": 401,
-                "body": None,
-                "body_text": str(exc),
-                "has_status_code": True,
-                "needs_reauth": True,
-                "error": None,
-            }
-        except Exception as exc:
-            return {
-                "status_code": 0,
-                "body": None,
-                "body_text": "",
-                "has_status_code": False,
-                "needs_reauth": False,
-                "error": f"network error: {exc}",
+                "status_code": 0, "body": None, "body_text": "",
+                "has_status_code": False, "needs_reauth": False,
+                "error": f"network error: {result['_network_error']}",
             }
 
-        status_code = int(result.get("status_code") or 0)
-        # 401 from the live response means OpenAI is telling us the cached
-        # access_token is dead. We DROP the token (so the next probe will
-        # re-pull from CPA) but never trigger an OAuth refresh from here.
-        # The frontend surfaces this as "needs re-authentication".
+        status_code = int((result or {}).get("status_code") or 0)
+
+        # --- 401 on a CACHED token: don't trust it yet. CPA may have rotated
+        # to a new token after our last cache. Force a fresh download and
+        # re-probe ONCE. Only if the FRESH token also 401s is the account
+        # truly dead (refresh_token revoked → needs browser re-login). This
+        # is what makes needs_reauth authoritative: "even a fresh CPA token
+        # 401s". We still never call an OAuth refresh grant ourselves. ---
+        if status_code == 401 and not freshly_downloaded:
+            fresh = _download()
+            if fresh and fresh != token:
+                token = fresh
+                result = _probe_once(token)
+                if result is not None and result.get("_network_error"):
+                    return {
+                        "status_code": 0, "body": None, "body_text": "",
+                        "has_status_code": False, "needs_reauth": False,
+                        "error": f"network error: {result['_network_error']}",
+                    }
+                status_code = int((result or {}).get("status_code") or 0)
+
+        # 401 after a fresh-token retry = the credential itself is dead.
         needs_reauth = status_code == 401
         if needs_reauth:
-            self.remove_invalid_token(acct.access_token, "probe_codex_usage:401")
+            self.remove_invalid_token(token, "probe_codex_usage:401")
 
         return {
             "status_code": status_code,
-            "body": result.get("body"),
-            "body_text": result.get("body_text") or "",
-            "has_status_code": bool(result.get("has_status_code")),
+            "body": (result or {}).get("body"),
+            "body_text": (result or {}).get("body_text") or "",
+            "has_status_code": bool((result or {}).get("has_status_code")),
             "needs_reauth": needs_reauth,
             "error": None,
         }
