@@ -51,6 +51,14 @@ class _Config:
     # to ONLY catch stuck calls, never preempt a slow-but-alive one. Set
     # >= 2 * image_poll_timeout_secs to be safe.
     image_inflight_reap_after_secs: int = _env_int("IMAGE_INFLIGHT_REAP_AFTER_SECS", 600)
+    # When a single image-gen attempt fails with a TRANSIENT error (network
+    # timeout, connection reset, upstream 5xx) we retry with a DIFFERENT
+    # pool account rather than 502ing the whole request. This caps how many
+    # such retries one image slot will burn before giving up — protects
+    # against a whole-pool ChatGPT outage spinning forever. Token-invalid
+    # evictions are NOT counted against this budget (those make progress by
+    # shrinking the dead-account set).
+    image_transient_retry_max: int = _env_int("IMAGE_TRANSIENT_RETRY_MAX", 4)
 
     # ---- account pool refresh cadence (in minutes; consumed by
     #      account_service's background refresher) ----

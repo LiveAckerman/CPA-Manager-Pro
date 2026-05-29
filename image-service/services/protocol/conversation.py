@@ -53,6 +53,41 @@ def is_token_invalid_error(message: str) -> bool:
     )
 
 
+def is_retryable_error(message: str) -> bool:
+    """Transient failures that warrant trying a DIFFERENT pool account
+    rather than aborting the whole request with a 502.
+
+    Covers: network timeouts (curl 28), connection resets / TLS hiccups
+    (curl 35/52/56), and upstream 5xx / gateway errors from ChatGPT.
+    These are NOT the account's fault — the token is fine, ChatGPT was
+    just slow or flaky on that one call — so the account is kept in the
+    pool and we simply pick the next one.
+
+    Deliberately does NOT include token-invalid (handled separately, the
+    account gets evicted) or content-policy 400s (those are deterministic
+    — retrying a different account won't help and wastes quota).
+    """
+    text = str(message or "").lower()
+    return (
+        "curl: (28)" in text            # operation timed out
+        or "timed out" in text
+        or "timeout" in text
+        or "curl: (35)" in text         # TLS connect error
+        or "curl: (52)" in text         # empty reply from server
+        or "curl: (56)" in text         # recv failure / connection reset
+        or "tls connect error" in text
+        or "connection reset" in text
+        or "connection aborted" in text
+        or "remote end closed" in text
+        or "status=502" in text
+        or "status=503" in text
+        or "status=504" in text
+        or "bad gateway" in text
+        or "service unavailable" in text
+        or "gateway timeout" in text
+    )
+
+
 def image_stream_error_message(message: str) -> str:
     text = str(message or "")
     lower = text.lower()
@@ -616,6 +651,9 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
     emitted = False
     last_error = ""
     for index in range(1, request.n + 1):
+        # Per-slot budget for transient-error retries (timeout / 5xx /
+        # connection reset). Reset for each image in an n>1 batch.
+        transient_retries = 0
         while True:
             try:
                 token = account_service.get_available_access_token()
@@ -656,8 +694,31 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
                 account_service.mark_image_result(token, False)
                 last_error = str(exc)
                 logger.warning({"event": "image_stream_fail", "request_token": token, "error": last_error})
+                # Dead token → evict this account and retry with another.
+                # Not counted against the transient budget; eviction shrinks
+                # the dead set so it can't loop forever.
                 if not emitted_for_token and is_token_invalid_error(last_error):
                     account_service.remove_invalid_token(token, "image_stream")
+                    continue
+                # Transient failure (timeout / 5xx / reset) → the account is
+                # fine, ChatGPT was just slow/flaky on that call. Keep the
+                # account in the pool and try a DIFFERENT one, up to the
+                # budget. This is the fix for the 502s: one slow account no
+                # longer aborts the whole request while healthy accounts go
+                # untried.
+                if (
+                    not emitted_for_token
+                    and is_retryable_error(last_error)
+                    and transient_retries < max(0, int(config.image_transient_retry_max))
+                ):
+                    transient_retries += 1
+                    logger.info({
+                        "event": "image_stream_retry",
+                        "request_token": token,
+                        "attempt": transient_retries,
+                        "max": int(config.image_transient_retry_max),
+                        "error": last_error[:160],
+                    })
                     continue
                 raise ImageGenerationError(image_stream_error_message(last_error)) from exc
 
