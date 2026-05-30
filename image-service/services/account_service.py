@@ -655,9 +655,15 @@ class AccountService:
                 acct = self._accounts.get(f.name)
                 if acct is None:
                     # Brand new account — no cached token, quota unknown.
-                    self._accounts[f.name] = _AccountState(
+                    # Respect only the user's explicit disabled toggle (not
+                    # CPA's unreliable unavailable flag — see the update
+                    # branch below for the full rationale).
+                    new_acct = _AccountState(
                         file_name=f.name, email=f.email, cpa_modtime=f.modtime,
                     )
+                    if f.disabled:
+                        new_acct.status = "disabled"
+                    self._accounts[f.name] = new_acct
                     logger.info("added CPA account: %s", f.email)
                 else:
                     # Update mutable per-file metadata. If modtime bumped,
@@ -669,10 +675,28 @@ class AccountService:
                         logger.info("CPA modtime bumped for %s; will re-download token", f.email)
                     acct.cpa_modtime = f.modtime
                     acct.email = f.email
-                    # Disabled / unavailable accounts get parked; pick skips them.
-                    if f.disabled or f.unavailable:
+                    # Only the user's explicit `disabled` toggle parks an
+                    # account. We deliberately IGNORE CPA's `unavailable`
+                    # flag here: for free ChatGPT accounts CPA's background
+                    # health probe (refresh-token path) over-marks healthy
+                    # accounts as unavailable — a probe sweep found 12/12
+                    # CPA-unavailable accounts actually returned 200 via the
+                    # safe path. Trusting that flag was excluding ~55 healthy
+                    # accounts (a third of the pool) from image generation.
+                    #
+                    # image-service does its OWN health tracking: a real 401
+                    # during image-gen or refresh marks the account "invalid"
+                    # (remove_invalid_token) and the picker retries another,
+                    # so we don't need — and can't trust — CPA's unavailable
+                    # signal. The user's manual `disabled` toggle is the only
+                    # authoritative "park this account" instruction.
+                    if f.disabled:
                         acct.status = "disabled"
                     elif acct.status == "disabled":
+                        # Was parked (by us, from an old disabled/unavailable
+                        # read); CPA now reports it not-user-disabled, so let
+                        # it back into rotation as fresh — next pick/refresh
+                        # re-downloads a token and promotes to active.
                         acct.status = "fresh"
             # Drop accounts CPA no longer lists.
             for name in list(self._accounts.keys()):

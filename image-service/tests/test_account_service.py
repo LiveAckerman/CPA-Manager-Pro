@@ -110,16 +110,35 @@ def test_disabled_account_is_skipped_by_picker():
     svc.release_image_slot(picked)
 
 
-def test_unavailable_account_is_skipped_too():
+def test_unavailable_account_is_NOT_skipped():
+    # CPA's `unavailable` flag is unreliable for free ChatGPT accounts (its
+    # refresh-token health probe over-marks healthy accounts), so
+    # image-service deliberately ignores it. An account flagged unavailable
+    # but NOT user-disabled stays eligible — its real health is determined
+    # by image-service's own 401 handling during use.
     files = [
-        _mkfile("codex-good-free.json", 1.0),
-        _mkfile("codex-ratelimited-free.json", 1.0, unavailable=True),
+        _mkfile("codex-unavail-free.json", 1.0, unavailable=True),
     ]
     svc = _patched_service([files], token_factory=lambda n: f"tok-{n}")
     svc._refresh_file_list_now()
+    acct = svc._accounts["codex-unavail-free.json"]
+    assert acct.status != "disabled"  # NOT parked despite unavailable=True
     picked = svc.get_available_access_token()
-    assert "good" in picked
+    assert "unavail" in picked  # it IS pickable
     svc.release_image_slot(picked)
+
+
+def test_unavailable_account_unparked_on_relist():
+    # An account previously parked as "disabled" (from an old read that
+    # honored unavailable) must come back into rotation once we stop
+    # trusting the flag — even if CPA still reports unavailable=True.
+    files = [_mkfile("codex-x-free.json", 1.0, unavailable=True)]
+    svc = _patched_service([files, files], token_factory=lambda n: "tok")
+    svc._refresh_file_list_now()
+    # Force the stale "disabled" state a pre-fix build would have left.
+    svc._accounts["codex-x-free.json"].status = "disabled"
+    svc._refresh_file_list_now()
+    assert svc._accounts["codex-x-free.json"].status == "fresh"
 
 
 def test_removed_file_drops_account():
