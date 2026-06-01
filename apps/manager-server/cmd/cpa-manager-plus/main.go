@@ -12,6 +12,7 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/collector"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/cparuntime"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/httpapi"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/security"
 	bootstrapservice "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/bootstrap"
@@ -53,6 +54,17 @@ func main() {
 	}
 	if bootstrapResult.MigratedLegacy {
 		log.Printf("CPA Manager Plus legacy data migrated")
+	}
+
+	// Share the wizard-configured CPA connection with the in-container
+	// image-service via /run/cpa_runtime.json, so it works without
+	// duplicate CPA_BASE_URL / CPA_MANAGEMENT_KEY env vars. Best-effort:
+	// a fresh install with no setup yet writes nothing; the setup-wizard
+	// save path re-syncs once the operator configures CPA.
+	if setup, ok, loadErr := db.LoadSetup(context.Background()); loadErr == nil && ok {
+		if syncErr := cparuntime.Sync(setup); syncErr != nil {
+			log.Printf("cpa runtime config sync failed: %v", syncErr)
+		}
 	}
 
 	manager := collector.NewManager(cfg, db)

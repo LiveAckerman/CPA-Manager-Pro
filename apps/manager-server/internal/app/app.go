@@ -8,7 +8,6 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/collector"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
-	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/cparuntime"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/security"
 	bootstrapsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/bootstrap"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
@@ -63,17 +62,5 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Context, err
 		serviceID,
 	)
 	appCtx.Bootstrap = bootstrapResult
-
-	// Share the (decrypted) CPA connection with the in-container
-	// image-service so it doesn't need its own CPA_BASE_URL /
-	// CPA_MANAGEMENT_KEY env vars — the web wizard the operator already
-	// filled in is the single source of truth. Best-effort: a fresh
-	// install with no setup yet just clears the file, and image-service
-	// keeps warning "cpa not configured" until the wizard runs and the
-	// save hook re-syncs.
-	if setup, ok, loadErr := st.LoadSetup(ctx); loadErr == nil && ok {
-		_ = cparuntime.Sync(setup)
-	}
-
 	return appCtx, nil
 }
