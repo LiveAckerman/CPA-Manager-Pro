@@ -4,9 +4,18 @@ import {
   fetchClaudeQuota,
   fetchGeminiCliCodeAssist,
   fetchGeminiCliQuotaBuckets,
+  fetchXaiQuota,
 } from '@/utils/quota';
 import type { MonitoringAccountQuotaTarget } from '@/features/monitoring/accountOverviewQuotaTargets';
-import { requestAccountQuota } from './monitoringCenterPageModel';
+import type { MonitoringAccountRow, MonitoringApiKeyRow } from '@/features/monitoring/hooks/useMonitoringData';
+import {
+  buildAccountOptions,
+  buildApiKeyOptionsFromRows,
+  buildChannelOptionsFromValues,
+  buildModelOptionsFromValues,
+  buildProviderOptionsFromValues,
+  requestAccountQuota,
+} from './monitoringCenterPageModel';
 
 vi.mock('@/utils/quota', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/utils/quota')>();
@@ -18,6 +27,7 @@ vi.mock('@/utils/quota', async (importOriginal) => {
     fetchGeminiCliCodeAssist: vi.fn(),
     fetchGeminiCliQuotaBuckets: vi.fn(),
     fetchKimiQuota: vi.fn(),
+    fetchXaiQuota: vi.fn(),
   };
 });
 
@@ -40,6 +50,11 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'gemini_cli_quota.remaining_amount': 'Remaining {{count}}',
     'kimi_quota.title': 'Kimi Quota',
     'kimi_quota.empty_data': 'No Kimi quota data',
+    'xai_quota.title': 'xAI Quota',
+    'xai_quota.empty_data': 'No xAI quota data',
+    'xai_quota.monthly_limit': 'Monthly billing limit',
+    'xai_quota.on_demand_cap': 'On-demand cap',
+    'xai_quota.usage_amount': '{{used}} / {{limit}}',
   };
   let value = copy[key] ?? key;
   Object.entries(options ?? {}).forEach(([name, replacement]) => {
@@ -65,11 +80,112 @@ const createTarget = (
   planType: overrides.planType ?? null,
 });
 
+const createAccountRow = (
+  account: string,
+  overrides: Partial<MonitoringAccountRow> = {}
+): MonitoringAccountRow => ({
+  id: account,
+  account,
+  displayAccount: account,
+  accountMasked: account,
+  authLabels: [],
+  authIndices: [],
+  channels: [],
+  totalCalls: 1,
+  successCalls: 1,
+  failureCalls: 0,
+  successRate: 1,
+  inputTokens: 1,
+  outputTokens: 1,
+  cachedTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+  totalTokens: 2,
+  totalCost: 0,
+  averageLatencyMs: null,
+  lastSeenAt: 1,
+  recentPattern: [],
+  models: [],
+  ...overrides,
+});
+
+const createApiKeyRow = (apiKeyHash: string, label: string): MonitoringApiKeyRow => ({
+  id: apiKeyHash,
+  apiKeyHash,
+  apiKeyLabel: label,
+  apiKeyMasked: label,
+  isUnknown: false,
+  authLabels: [],
+  sourceLabels: [],
+  channels: [],
+  totalCalls: 1,
+  successCalls: 1,
+  failureCalls: 0,
+  successRate: 1,
+  inputTokens: 1,
+  outputTokens: 1,
+  cachedTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+  totalTokens: 2,
+  totalCost: 0,
+  averageLatencyMs: null,
+  lastSeenAt: 1,
+  models: [],
+});
+
+describe('monitoringCenterPageModel filter options', () => {
+  it('keeps alternate candidates when a dynamic filter already has a selected value', () => {
+    expect(buildProviderOptionsFromValues(['codex', 'gemini'], 'codex', t).map((item) => item.value)).toEqual([
+      'all',
+      'codex',
+      'gemini',
+    ]);
+    expect(
+      buildAccountOptions(
+        [createAccountRow('alice@example.com'), createAccountRow('bob@example.com')],
+        'alice@example.com',
+        t
+      ).map((item) => item.value)
+    ).toEqual(['all', 'alice@example.com', 'bob@example.com']);
+    expect(buildModelOptionsFromValues(['gpt-a', 'gpt-b'], 'gpt-a', t).map((item) => item.value)).toEqual([
+      'all',
+      'gpt-a',
+      'gpt-b',
+    ]);
+    expect(
+      buildChannelOptionsFromValues(['Primary', 'Backup'], 'Primary', t).map((item) => item.value)
+    ).toEqual(['all', 'Backup', 'Primary']);
+    expect(
+      buildApiKeyOptionsFromRows(
+        [createApiKeyRow('key-a', 'Key A'), createApiKeyRow('key-b', 'Key B')],
+        'key-a',
+        t
+      ).map((item) => item.value)
+    ).toEqual(['all', 'key-a', 'key-b']);
+  });
+
+  it('uses account row filter values for account options', () => {
+    expect(
+      buildAccountOptions(
+        [
+          createAccountRow('OpenAI Compatible', {
+            filterValue: 'auth:openai-auth',
+          }),
+        ],
+        'auth:openai-auth',
+        t
+      ).map((item) => item.value)
+    ).toEqual(['all', 'auth:openai-auth']);
+  });
+});
+
 describe('monitoringCenterPageModel account quota', () => {
   beforeEach(() => {
     vi.mocked(fetchClaudeQuota).mockReset();
     vi.mocked(fetchGeminiCliCodeAssist).mockReset();
     vi.mocked(fetchGeminiCliQuotaBuckets).mockReset();
+    vi.mocked(fetchXaiQuota).mockReset();
   });
 
   it('maps Claude usage windows into account quota entries', async () => {
@@ -154,5 +270,39 @@ describe('monitoringCenterPageModel account quota', () => {
       },
     ]);
     expect(fetchGeminiCliCodeAssist).toHaveBeenCalledWith('2', 'project-1', t);
+  });
+
+  it('maps xAI billing into account quota entries', async () => {
+    vi.mocked(fetchXaiQuota).mockResolvedValue({
+      monthlyLimitCents: 10000,
+      usedCents: 2500,
+      onDemandCapCents: 5000,
+      billingPeriodStart: '2026-05-01T00:00:00Z',
+      billingPeriodEnd: '2026-06-01T00:00:00Z',
+      usedPercent: 25,
+    });
+
+    const entry = await requestAccountQuota(
+      createTarget({
+        provider: 'xai',
+        authIndex: '3',
+        fileName: 'xai.json',
+      }),
+      t
+    );
+
+    expect(entry).toMatchObject({
+      provider: 'xai',
+      providerLabel: 'xAI Quota',
+      metaLabels: ['xAI Quota', 'On-demand cap: $50.00'],
+      windows: [
+        {
+          id: 'monthly-limit',
+          label: 'Monthly billing limit',
+          remainingPercent: 75,
+          usageLabel: '$25.00 / $100.00',
+        },
+      ],
+    });
   });
 });

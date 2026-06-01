@@ -73,21 +73,67 @@ type CodexInspectionDecision = Pick<
   'action' | 'actionReason' | 'usedPercent' | 'isQuota'
 >;
 
+type UnauthorizedReason = 'unknown' | 'expired' | 'invalidated';
+
+const classifyUnauthorizedReason = (bodyText: string): UnauthorizedReason => {
+  const normalized = bodyText.trim().toLowerCase();
+  if (
+    normalized.includes('provided authentication token is expired') ||
+    normalized.includes('authentication token is expired') ||
+    normalized.includes('token is expired')
+  ) {
+    return 'expired';
+  }
+  if (
+    normalized.includes('authentication token has been invalidated') ||
+    normalized.includes('token has been invalidated') ||
+    normalized.includes('token is invalidated')
+  ) {
+    return 'invalidated';
+  }
+  return 'unknown';
+};
+
+const resolveUnauthorizedProbeAction = (
+  bodyText: string,
+  usedPercent: number | null
+): CodexInspectionDecision => {
+  switch (classifyUnauthorizedReason(bodyText)) {
+    case 'expired':
+      return {
+        action: 'reauth',
+        actionReason: '接口返回 401，登录已过期，建议重新登录账号',
+        usedPercent,
+        isQuota: false,
+      };
+    case 'invalidated':
+      return {
+        action: 'delete',
+        actionReason: '接口返回 401，认证令牌已失效，建议删除账号',
+        usedPercent,
+        isQuota: false,
+      };
+    default:
+      return {
+        action: 'delete',
+        actionReason: '接口返回 401，建议删除失效账号',
+        usedPercent,
+        isQuota: false,
+      };
+  }
+};
+
 const resolveLegacyProbeAction = (
   account: CodexInspectionAccount,
   statusCode: number,
+  bodyText: string,
   usedPercent: number | null,
   isQuota: boolean,
   threshold: number
 ): CodexInspectionDecision => {
   const overThreshold = usedPercent !== null && usedPercent >= threshold;
   if (statusCode === 401) {
-    return {
-      action: 'delete',
-      actionReason: '接口返回 401，建议删除失效账号',
-      usedPercent,
-      isQuota: false,
-    };
+    return resolveUnauthorizedProbeAction(bodyText, usedPercent);
   }
   if (isQuota || overThreshold) {
     if (account.disabled) {
@@ -124,6 +170,7 @@ const resolveLegacyProbeAction = (
 const resolveWindowAwareProbeAction = (
   account: CodexInspectionAccount,
   statusCode: number,
+  bodyText: string,
   rateLimit: CodexRateLimitInfo | null,
   threshold: number
 ): CodexInspectionDecision | null => {
@@ -138,12 +185,7 @@ const resolveWindowAwareProbeAction = (
   const fiveHourOverThreshold = fiveHourUsedPercent !== null && fiveHourUsedPercent >= threshold;
 
   if (statusCode === 401) {
-    return {
-      action: 'delete',
-      actionReason: '接口返回 401，建议删除失效账号',
-      usedPercent: weeklyUsedPercent,
-      isQuota: false,
-    };
+    return resolveUnauthorizedProbeAction(bodyText, weeklyUsedPercent);
   }
 
   if (weeklyOverThreshold) {
@@ -194,6 +236,7 @@ const resolveWindowAwareProbeAction = (
 const resolveProbeAction = (
   account: CodexInspectionAccount,
   statusCode: number,
+  bodyText: string,
   rateLimit: CodexRateLimitInfo | null,
   usedPercent: number | null,
   isQuota: boolean,
@@ -202,11 +245,12 @@ const resolveProbeAction = (
   const windowAwareDecision = resolveWindowAwareProbeAction(
     account,
     statusCode,
+    bodyText,
     rateLimit,
     threshold
   );
   if (windowAwareDecision) return windowAwareDecision;
-  return resolveLegacyProbeAction(account, statusCode, usedPercent, isQuota, threshold);
+  return resolveLegacyProbeAction(account, statusCode, bodyText, usedPercent, isQuota, threshold);
 };
 
 export const inspectSingleAccount = async (
@@ -319,6 +363,7 @@ export const inspectSingleAccount = async (
     const decision = resolveProbeAction(
       account,
       result.statusCode,
+      result.bodyText,
       rateLimit,
       usedPercent,
       isQuota,

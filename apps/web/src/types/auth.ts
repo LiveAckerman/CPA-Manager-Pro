@@ -14,6 +14,14 @@ export interface LoginCredentials {
   sessionPanelBase?: string;
 }
 
+export type LoginRecoveryMode = 'manager_config';
+
+export interface LoginResult {
+  recoveryMode?: LoginRecoveryMode;
+}
+
+export type RestoreSessionResult = LoginResult | false;
+
 // 认证状态
 export interface AuthState {
   isAuthenticated: boolean;

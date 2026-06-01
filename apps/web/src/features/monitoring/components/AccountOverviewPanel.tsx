@@ -83,7 +83,7 @@ type AccountOverviewPanelProps = {
   onAccountStatusToggle: (row: MonitoringAccountRow, enabled: boolean) => void | Promise<void>;
   onLoadAccountQuota: (account: string, force: boolean) => void | Promise<void>;
   onToggleExpanded: (rowId: string, account: string) => void;
-  onFocusAccount: (account: string) => void;
+  onFocusAccount: (row: MonitoringAccountRow) => void;
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
 };
@@ -408,7 +408,7 @@ export function AccountOverviewPanel({
                           <button
                             type="button"
                             className={styles.inlineActionButton}
-                            onClick={() => onFocusAccount(row.account)}
+                            onClick={() => onFocusAccount(row)}
                           >
                             <IconCrosshair size={13} aria-hidden="true" />
                             <span>
@@ -473,7 +473,7 @@ export function AccountOverviewPanel({
                 quotaState={accountQuotaStates[row.account]}
                 statusUpdating={accountStatusUpdating[row.id] === true}
                 onToggle={() => onToggleExpanded(row.id, row.account)}
-                onFocus={() => onFocusAccount(row.account)}
+                onFocus={() => onFocusAccount(row)}
                 onToggleEnabled={(enabled) => void onAccountStatusToggle(row, enabled)}
                 onRefreshQuota={() => void onLoadAccountQuota(row.account, true)}
               />

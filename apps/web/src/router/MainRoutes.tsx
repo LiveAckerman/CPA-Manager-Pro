@@ -25,13 +25,23 @@ import { ConfigPage } from '@/pages/ConfigPage';
 import { LogsPage } from '@/pages/LogsPage';
 import { SystemPage } from '@/pages/SystemPage';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
+import { CodexInspectionModeTabs } from '@/features/monitoring/components/CodexInspectionModeTabs';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { isFileLogsAvailable } from '@/features/logs/logFeatureAvailability';
 import { useConfigStore } from '@/stores';
+import codexInspectionStyles from '@/features/monitoring/CodexInspectionPage.module.scss';
 
 type FeatureKey = 'requestMonitoring' | 'modelPrices' | 'serverCodexInspection';
 
-function FeatureGate({ feature, children }: { feature: FeatureKey; children: ReactElement }) {
+function FeatureGate({
+  feature,
+  children,
+  fallback,
+}: {
+  feature: FeatureKey;
+  children: ReactElement;
+  fallback?: ReactElement | null;
+}) {
   const availability = usePanelFeatureAvailability();
   const enabled =
     feature === 'requestMonitoring'
@@ -41,7 +51,7 @@ function FeatureGate({ feature, children }: { feature: FeatureKey; children: Rea
         : availability.serverCodexInspectionAvailable;
 
   if (availability.checking) {
-    return <LoadingSpinner />;
+    return fallback ?? <LoadingSpinner />;
   }
 
   if (!enabled) {
@@ -49,6 +59,49 @@ function FeatureGate({ feature, children }: { feature: FeatureKey; children: Rea
   }
 
   return children;
+}
+
+function ServerCodexInspectionRouteFallback() {
+  return (
+    <div className={codexInspectionStyles.page} aria-busy="true">
+      <CodexInspectionModeTabs activeMode="server" />
+      <section
+        className={[
+          codexInspectionStyles.panel,
+          codexInspectionStyles.statusPanel,
+          codexInspectionStyles.routeSkeletonPanel,
+        ]
+          .filter(Boolean)
+          .join(' ')}
+      >
+        <div className={codexInspectionStyles.routeSkeletonHeader}>
+          <span
+            className={[
+              codexInspectionStyles.routeSkeletonLine,
+              codexInspectionStyles.routeSkeletonLineTitle,
+            ]
+              .filter(Boolean)
+              .join(' ')}
+          />
+          <span className={codexInspectionStyles.routeSkeletonPill} />
+        </div>
+        <div className={codexInspectionStyles.routeSkeletonMeta}>
+          <span className={codexInspectionStyles.routeSkeletonPill} />
+          <span className={codexInspectionStyles.routeSkeletonPill} />
+          <span className={codexInspectionStyles.routeSkeletonPillWide} />
+        </div>
+        <div className={codexInspectionStyles.routeSkeletonGrid}>
+          {Array.from({ length: 6 }).map((_, index) => (
+            <span key={index} className={codexInspectionStyles.routeSkeletonCard} />
+          ))}
+        </div>
+      </section>
+      <section className={codexInspectionStyles.routeSkeletonDetailGrid}>
+        <span className={codexInspectionStyles.routeSkeletonBlock} />
+        <span className={codexInspectionStyles.routeSkeletonBlockTall} />
+      </section>
+    </div>
+  );
 }
 
 function LogsGate({ children }: { children: ReactElement }) {
@@ -129,7 +182,10 @@ const mainRoutes = [
   {
     path: '/codex-inspection/server',
     element: (
-      <FeatureGate feature="serverCodexInspection">
+      <FeatureGate
+        feature="serverCodexInspection"
+        fallback={<ServerCodexInspectionRouteFallback />}
+      >
         <ServerCodexInspectionPage />
       </FeatureGate>
     ),

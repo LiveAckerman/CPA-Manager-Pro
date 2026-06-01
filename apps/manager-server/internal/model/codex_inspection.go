@@ -14,6 +14,7 @@ const (
 	CodexInspectionScheduleModeTimePoints = "time_points"
 
 	CodexInspectionAutoActionNone    = "none"
+	CodexInspectionAutoActionEnable  = "enable"
 	CodexInspectionAutoActionDisable = "disable"
 	CodexInspectionAutoActionDelete  = "delete"
 
@@ -23,6 +24,13 @@ const (
 
 	CodexInspectionTriggerManual    = "manual"
 	CodexInspectionTriggerScheduled = "scheduled"
+
+	CodexInspectionActionStatusNone        = "none"
+	CodexInspectionActionStatusPending     = "pending"
+	CodexInspectionActionStatusSuccess     = "success"
+	CodexInspectionActionStatusFailed      = "failed"
+	CodexInspectionActionStatusSkipped     = "skipped"
+	CodexInspectionActionStatusNeedsReview = "needs_review"
 )
 
 type ManagerCodexInspectionConfig struct {
@@ -47,26 +55,27 @@ type ManagerCodexInspectionScheduleConfig struct {
 }
 
 type CodexInspectionRun struct {
-	ID                   int64                         `json:"id"`
-	TriggerType          string                        `json:"triggerType"`
-	TriggerKey           string                        `json:"triggerKey,omitempty"`
-	Status               string                        `json:"status"`
-	StartedAtMS          int64                         `json:"startedAtMs"`
-	FinishedAtMS         int64                         `json:"finishedAtMs,omitempty"`
-	TotalFiles           int                           `json:"totalFiles"`
-	ProbeSetCount        int                           `json:"probeSetCount"`
-	SampledCount         int                           `json:"sampledCount"`
-	DisabledCount        int                           `json:"disabledCount"`
-	EnabledCount         int                           `json:"enabledCount"`
-	DeleteCount          int                           `json:"deleteCount"`
-	DisableCount         int                           `json:"disableCount"`
-	EnableCount          int                           `json:"enableCount"`
-	KeepCount            int                           `json:"keepCount"`
-	Error                string                        `json:"error,omitempty"`
-	Settings             ManagerCodexInspectionConfig `json:"settings"`
-	SettingsJSON         string                        `json:"-"`
-	CreatedAtMS          int64                         `json:"createdAtMs"`
-	UpdatedAtMS          int64                         `json:"updatedAtMs"`
+	ID            int64                        `json:"id"`
+	TriggerType   string                       `json:"triggerType"`
+	TriggerKey    string                       `json:"triggerKey,omitempty"`
+	Status        string                       `json:"status"`
+	StartedAtMS   int64                        `json:"startedAtMs"`
+	FinishedAtMS  int64                        `json:"finishedAtMs,omitempty"`
+	TotalFiles    int                          `json:"totalFiles"`
+	ProbeSetCount int                          `json:"probeSetCount"`
+	SampledCount  int                          `json:"sampledCount"`
+	DisabledCount int                          `json:"disabledCount"`
+	EnabledCount  int                          `json:"enabledCount"`
+	DeleteCount   int                          `json:"deleteCount"`
+	DisableCount  int                          `json:"disableCount"`
+	EnableCount   int                          `json:"enableCount"`
+	ReauthCount   int                          `json:"reauthCount"`
+	KeepCount     int                          `json:"keepCount"`
+	Error         string                       `json:"error,omitempty"`
+	Settings      ManagerCodexInspectionConfig `json:"settings"`
+	SettingsJSON  string                       `json:"-"`
+	CreatedAtMS   int64                        `json:"createdAtMs"`
+	UpdatedAtMS   int64                        `json:"updatedAtMs"`
 }
 
 type CodexInspectionResult struct {
@@ -83,6 +92,9 @@ type CodexInspectionResult struct {
 	State          string   `json:"state,omitempty"`
 	Action         string   `json:"action"`
 	ActionReason   string   `json:"actionReason"`
+	ActionStatus   string   `json:"actionStatus,omitempty"`
+	ExecutedAction string   `json:"executedAction,omitempty"`
+	ActionError    string   `json:"actionError,omitempty"`
 	StatusCode     *int     `json:"statusCode,omitempty"`
 	UsedPercent    *float64 `json:"usedPercent,omitempty"`
 	IsQuota        bool     `json:"isQuota"`
@@ -134,6 +146,9 @@ func NormalizeCodexInspectionConfig(input ManagerCodexInspectionConfig, fallback
 	next.Workers = positiveOr(input.Workers, base.Workers)
 	next.DeleteWorkers = positiveOr(input.DeleteWorkers, positiveOr(input.Workers, base.DeleteWorkers))
 	next.Timeout = positiveOr(input.Timeout, base.Timeout)
+	// Retries and SampleSize intentionally accept zero as an explicit value.
+	// Frontend config submissions write complete config objects, so omitted
+	// fields are indistinguishable from zero in this non-pointer schema.
 	if input.Retries >= 0 {
 		next.Retries = input.Retries
 	}
@@ -269,6 +284,8 @@ func NormalizeCodexInspectionTimePoint(value string) (string, bool) {
 
 func NormalizeCodexInspectionAutoActionMode(value string, fallback string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
+	case CodexInspectionAutoActionEnable:
+		return CodexInspectionAutoActionEnable
 	case CodexInspectionAutoActionDisable:
 		return CodexInspectionAutoActionDisable
 	case CodexInspectionAutoActionDelete:
@@ -276,10 +293,36 @@ func NormalizeCodexInspectionAutoActionMode(value string, fallback string) strin
 	case CodexInspectionAutoActionNone:
 		return CodexInspectionAutoActionNone
 	default:
-		if fallback == CodexInspectionAutoActionDisable || fallback == CodexInspectionAutoActionDelete {
+		if fallback == CodexInspectionAutoActionEnable ||
+			fallback == CodexInspectionAutoActionDisable ||
+			fallback == CodexInspectionAutoActionDelete {
 			return fallback
 		}
 		return CodexInspectionAutoActionNone
+	}
+}
+
+func NormalizeCodexInspectionActionStatus(value string, action string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case CodexInspectionActionStatusNone:
+		return CodexInspectionActionStatusNone
+	case CodexInspectionActionStatusSuccess:
+		return CodexInspectionActionStatusSuccess
+	case CodexInspectionActionStatusFailed:
+		return CodexInspectionActionStatusFailed
+	case CodexInspectionActionStatusSkipped:
+		return CodexInspectionActionStatusSkipped
+	case CodexInspectionActionStatusNeedsReview:
+		return CodexInspectionActionStatusNeedsReview
+	case CodexInspectionActionStatusPending:
+		return CodexInspectionActionStatusPending
+	default:
+		switch strings.ToLower(strings.TrimSpace(action)) {
+		case CodexInspectionAutoActionDelete, CodexInspectionAutoActionDisable, CodexInspectionAutoActionEnable:
+			return CodexInspectionActionStatusPending
+		default:
+			return CodexInspectionActionStatusNone
+		}
 	}
 }
 

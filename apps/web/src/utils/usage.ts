@@ -9,6 +9,8 @@ export interface ModelPrice {
   prompt: number;
   completion: number;
   cache: number;
+  cacheRead?: number;
+  cacheCreation?: number;
   source?: string;
   sourceModelId?: string;
   rawJson?: string;
@@ -22,6 +24,8 @@ export interface UsageTokens {
   reasoning_tokens?: number;
   cached_tokens?: number;
   cache_tokens?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
   total_tokens?: number;
 }
 
@@ -43,9 +47,18 @@ export interface UsageDetail {
   authProjectIdSnapshot?: string;
   auth_snapshot_at_ms?: number;
   authSnapshotAtMs?: number;
+  reasoning_effort?: string;
+  reasoningEffort?: string;
   latency_ms?: number;
+  ttft_ms?: number;
   tokens: UsageTokens;
   failed: boolean;
+  fail_status_code?: number | null;
+  failStatusCode?: number | null;
+  fail_summary?: string;
+  failSummary?: string;
+  fail_body?: string;
+  failBody?: string;
   __modelName?: string;
   __resolvedModel?: string;
   __timestampMs?: number;
@@ -72,8 +85,9 @@ const USAGE_SOURCE_PREFIX_KEY = 'k:';
 const USAGE_SOURCE_PREFIX_MASKED = 'm:';
 const USAGE_SOURCE_PREFIX_TEXT = 't:';
 const KEY_LIKE_TOKEN_REGEX =
-  /(sk-proj-[A-Za-z0-9-_]{6,}|sk-ant-[A-Za-z0-9-_]{6,}|sk-[A-Za-z0-9-_]{6,}|sess-[A-Za-z0-9-_]{6,}|ghp_[A-Za-z0-9]{6,}|github_pat_[A-Za-z0-9_]{20,}|AIza[0-9A-Za-z-_]{8,}|AI[a-zA-Z0-9_-]{6,}|hf_[A-Za-z0-9]{6,}|pk_[A-Za-z0-9]{6,}|rk_[A-Za-z0-9]{6,})/;
+  /(sk-proj-[A-Za-z0-9-_]{6,}|sk-ant-[A-Za-z0-9-_]{6,}|sk-[A-Za-z0-9-_]{6,}|sess-[A-Za-z0-9-_]{6,}|ghp_[A-Za-z0-9]{6,}|github_pat_[A-Za-z0-9_]{20,}|AIza[0-9A-Za-z-_]{8,}|hf_[A-Za-z0-9]{6,}|pk_[A-Za-z0-9]{6,}|rk_[A-Za-z0-9]{6,})/;
 const MASKED_TOKEN_HINT_REGEX = /^[^\s]{1,24}(\*{2,}|\.{3})[^\s]{1,24}$/;
+const BACKEND_MASKED_SOURCE_REGEX = /^m:(\*{4}|[^\s/\\]{4}\.\.\.[^\s/\\]{4})$/;
 
 const keyFingerprintCache = new Map<string, string>();
 const usageDetailsCache = new WeakMap<object, UsageDetail[]>();
@@ -92,10 +106,34 @@ const toPositiveNumber = (value: unknown): number | undefined => {
   return numberValue > 0 ? numberValue : undefined;
 };
 
+const toOptionalNumber = (value: unknown): number | undefined => {
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
+    return undefined;
+  }
+  const numberValue = toFiniteNumber(value);
+  return Number.isFinite(numberValue) ? numberValue : undefined;
+};
+
 const readDetailString = (value: unknown): string | undefined => {
   if (value === null || value === undefined) return undefined;
   const text = String(value).trim();
   return text || undefined;
+};
+
+export const compatibleCachedTokens = (
+  cachedTokens: unknown,
+  cacheTokens: unknown,
+  cacheReadTokens: unknown,
+  cacheCreationTokens: unknown
+): number => {
+  const cached = Math.max(
+    Math.max(toFiniteNumber(cachedTokens), 0),
+    Math.max(toFiniteNumber(cacheTokens), 0)
+  );
+  if (cached <= 0) return 0;
+  const fineGrained =
+    Math.max(toFiniteNumber(cacheReadTokens), 0) + Math.max(toFiniteNumber(cacheCreationTokens), 0);
+  return Math.max(cached - fineGrained, 0);
 };
 
 const getApisRecord = (usageData: unknown): Record<string, unknown> | null => {
@@ -161,6 +199,14 @@ const extractRawSecretFromText = (text: string): string | null => {
   return bearerValue && looksLikeRawSecret(bearerValue) ? bearerValue : null;
 };
 
+export function maskUsageSecretSource(secret: string): string {
+  const trimmed = String(secret || '').trim();
+  if (!trimmed) return '';
+
+  if (trimmed.length <= 8) return '****';
+  return `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`;
+}
+
 export function normalizeUsageSourceId(
   value: unknown,
   masker: (val: string) => string = maskApiKey
@@ -169,6 +215,18 @@ export function normalizeUsageSourceId(
     typeof value === 'string' ? value : value === null || value === undefined ? '' : String(value);
   const trimmed = raw.trim();
   if (!trimmed) return '';
+  if (trimmed.startsWith(USAGE_SOURCE_PREFIX_KEY)) return trimmed;
+  if (trimmed.startsWith(USAGE_SOURCE_PREFIX_MASKED)) {
+    if (BACKEND_MASKED_SOURCE_REGEX.test(trimmed)) return trimmed;
+    const maskedValue = trimmed.slice(USAGE_SOURCE_PREFIX_MASKED.length).trim();
+    const extracted = extractRawSecretFromText(maskedValue) || extractRawSecretFromText(trimmed);
+    return extracted ? `${USAGE_SOURCE_PREFIX_KEY}${fnv1a64Hex(extracted)}` : trimmed;
+  }
+  if (trimmed.startsWith(USAGE_SOURCE_PREFIX_TEXT)) {
+    const textSource = trimmed.slice(USAGE_SOURCE_PREFIX_TEXT.length).trim();
+    const extracted = extractRawSecretFromText(textSource);
+    return extracted ? `${USAGE_SOURCE_PREFIX_KEY}${fnv1a64Hex(extracted)}` : trimmed;
+  }
 
   const extracted = extractRawSecretFromText(trimmed);
   if (extracted) return `${USAGE_SOURCE_PREFIX_KEY}${fnv1a64Hex(extracted)}`;
@@ -189,6 +247,8 @@ export function buildCandidateUsageSourceIds(input: {
   const apiKey = input.apiKey?.trim();
   if (apiKey) {
     result.push(normalizeUsageSourceId(apiKey));
+    result.push(`${USAGE_SOURCE_PREFIX_MASKED}${maskUsageSecretSource(apiKey)}`);
+    result.push(`${USAGE_SOURCE_PREFIX_MASKED}${maskApiKey(apiKey)}`);
     result.push(`${USAGE_SOURCE_PREFIX_TEXT}${maskApiKey(apiKey)}`);
   }
 
@@ -210,25 +270,65 @@ export function extractLatencyMs(detail: unknown): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
+export function extractTTFTMs(detail: unknown): number | null {
+  const record = isRecord(detail) ? detail : null;
+  const rawValue =
+    record?.ttft_ms ??
+    record?.ttftMs ??
+    record?.time_to_first_token_ms ??
+    record?.timeToFirstTokenMs;
+  if (
+    rawValue === null ||
+    rawValue === undefined ||
+    (typeof rawValue === 'string' && rawValue.trim() === '')
+  ) {
+    return null;
+  }
+
+  const parsed = Number(rawValue);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
 const readTokens = (detail: Record<string, unknown>): UsageTokens => {
   const tokensRaw = isRecord(detail.tokens) ? detail.tokens : {};
+  const cacheReadTokens = toFiniteNumber(tokensRaw.cache_read_tokens ?? tokensRaw.cacheReadTokens);
+  const cacheCreationTokens = toFiniteNumber(
+    tokensRaw.cache_creation_tokens ?? tokensRaw.cacheCreationTokens
+  );
+  const cachedTokens = compatibleCachedTokens(
+    tokensRaw.cached_tokens ?? tokensRaw.cachedTokens,
+    tokensRaw.cache_tokens ?? tokensRaw.cacheTokens,
+    cacheReadTokens,
+    cacheCreationTokens
+  );
+  const inputTokens = toFiniteNumber(tokensRaw.input_tokens ?? tokensRaw.inputTokens);
+  const outputTokens = toFiniteNumber(tokensRaw.output_tokens ?? tokensRaw.outputTokens);
+  const reasoningTokens = toFiniteNumber(tokensRaw.reasoning_tokens ?? tokensRaw.reasoningTokens);
+  const explicitTotalTokens = toFiniteNumber(tokensRaw.total_tokens ?? tokensRaw.totalTokens);
+  const totalTokens =
+    explicitTotalTokens > 0
+      ? explicitTotalTokens
+      : inputTokens +
+        outputTokens +
+        reasoningTokens +
+        cachedTokens +
+        cacheReadTokens +
+        cacheCreationTokens;
   return {
-    input_tokens: toFiniteNumber(tokensRaw.input_tokens ?? tokensRaw.inputTokens),
-    output_tokens: toFiniteNumber(tokensRaw.output_tokens ?? tokensRaw.outputTokens),
-    reasoning_tokens: toFiniteNumber(tokensRaw.reasoning_tokens ?? tokensRaw.reasoningTokens),
-    cached_tokens: toFiniteNumber(tokensRaw.cached_tokens ?? tokensRaw.cachedTokens),
-    cache_tokens: toFiniteNumber(tokensRaw.cache_tokens ?? tokensRaw.cacheTokens),
-    total_tokens: toFiniteNumber(tokensRaw.total_tokens ?? tokensRaw.totalTokens),
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    reasoning_tokens: reasoningTokens,
+    cached_tokens: cachedTokens,
+    cache_tokens: cachedTokens,
+    cache_read_tokens: cacheReadTokens,
+    cache_creation_tokens: cacheCreationTokens,
+    total_tokens: totalTokens,
   };
 };
 
 const normalizeSourceWithCache = (sourceCache: Map<string, string>, value: unknown): string => {
   const raw =
-    typeof value === 'string'
-      ? value
-      : value === null || value === undefined
-        ? ''
-        : String(value);
+    typeof value === 'string' ? value : value === null || value === undefined ? '' : String(value);
   const trimmed = raw.trim();
   if (!trimmed) return '';
 
@@ -267,6 +367,8 @@ export function collectUsageDetails(usageData: unknown): UsageDetail[] {
         const timestamp = detailRaw.timestamp;
         const timestampMs = parseTimestampMs(timestamp);
         const latencyMs = extractLatencyMs(detailRaw);
+        const ttftMs = extractTTFTMs(detailRaw);
+        const failRaw = isRecord(detailRaw.fail) ? detailRaw.fail : {};
         details.push({
           timestamp,
           source: normalizeSourceWithCache(sourceCache, detailRaw.source),
@@ -275,7 +377,9 @@ export function collectUsageDetails(usageData: unknown): UsageDetail[] {
             detailRaw.AuthIndex ??
             null) as UsageDetail['auth_index'],
           api_key_hash: readDetailString(detailRaw.api_key_hash ?? detailRaw.apiKeyHash),
-          account_snapshot: readDetailString(detailRaw.account_snapshot ?? detailRaw.accountSnapshot),
+          account_snapshot: readDetailString(
+            detailRaw.account_snapshot ?? detailRaw.accountSnapshot
+          ),
           auth_label_snapshot: readDetailString(
             detailRaw.auth_label_snapshot ?? detailRaw.authLabelSnapshot
           ),
@@ -291,9 +395,22 @@ export function collectUsageDetails(usageData: unknown): UsageDetail[] {
           auth_snapshot_at_ms: toPositiveNumber(
             detailRaw.auth_snapshot_at_ms ?? detailRaw.authSnapshotAtMs
           ),
+          reasoning_effort: readDetailString(
+            detailRaw.reasoning_effort ?? detailRaw.reasoningEffort
+          ),
           latency_ms: latencyMs ?? undefined,
+          ttft_ms: ttftMs ?? undefined,
           tokens: readTokens(detailRaw),
           failed: detailRaw.failed === true,
+          fail_status_code:
+            toOptionalNumber(
+              detailRaw.fail_status_code ??
+                detailRaw.failStatusCode ??
+                failRaw.status_code ??
+                failRaw.statusCode
+            ) ?? null,
+          fail_summary: readDetailString(detailRaw.fail_summary ?? detailRaw.failSummary),
+          fail_body: readDetailString(detailRaw.fail_body ?? detailRaw.failBody ?? failRaw.body),
           __modelName: modelName,
           __resolvedModel: readDetailString(detailRaw.resolved_model ?? detailRaw.resolvedModel),
           __timestampMs: Number.isNaN(timestampMs) ? 0 : timestampMs,
@@ -337,6 +454,8 @@ export function collectUsageDetailsWithEndpoint(usageData: unknown): UsageDetail
         const timestamp = detailRaw.timestamp;
         const timestampMs = parseTimestampMs(timestamp);
         const latencyMs = extractLatencyMs(detailRaw);
+        const ttftMs = extractTTFTMs(detailRaw);
+        const failRaw = isRecord(detailRaw.fail) ? detailRaw.fail : {};
         details.push({
           timestamp,
           source: normalizeSourceWithCache(sourceCache, detailRaw.source),
@@ -345,7 +464,9 @@ export function collectUsageDetailsWithEndpoint(usageData: unknown): UsageDetail
             detailRaw.AuthIndex ??
             null) as UsageDetail['auth_index'],
           api_key_hash: readDetailString(detailRaw.api_key_hash ?? detailRaw.apiKeyHash),
-          account_snapshot: readDetailString(detailRaw.account_snapshot ?? detailRaw.accountSnapshot),
+          account_snapshot: readDetailString(
+            detailRaw.account_snapshot ?? detailRaw.accountSnapshot
+          ),
           auth_label_snapshot: readDetailString(
             detailRaw.auth_label_snapshot ?? detailRaw.authLabelSnapshot
           ),
@@ -361,9 +482,22 @@ export function collectUsageDetailsWithEndpoint(usageData: unknown): UsageDetail
           auth_snapshot_at_ms: toPositiveNumber(
             detailRaw.auth_snapshot_at_ms ?? detailRaw.authSnapshotAtMs
           ),
+          reasoning_effort: readDetailString(
+            detailRaw.reasoning_effort ?? detailRaw.reasoningEffort
+          ),
           latency_ms: latencyMs ?? undefined,
+          ttft_ms: ttftMs ?? undefined,
           tokens: readTokens(detailRaw),
           failed: detailRaw.failed === true,
+          fail_status_code:
+            toOptionalNumber(
+              detailRaw.fail_status_code ??
+                detailRaw.failStatusCode ??
+                failRaw.status_code ??
+                failRaw.statusCode
+            ) ?? null,
+          fail_summary: readDetailString(detailRaw.fail_summary ?? detailRaw.failSummary),
+          fail_body: readDetailString(detailRaw.fail_body ?? detailRaw.failBody ?? failRaw.body),
           __modelName: modelName,
           __resolvedModel: readDetailString(detailRaw.resolved_model ?? detailRaw.resolvedModel),
           __endpoint: endpoint,
@@ -388,12 +522,29 @@ export function extractTotalTokens(detail: unknown): number {
   const inputTokens = toFiniteNumber(tokens.input_tokens ?? tokens.inputTokens);
   const outputTokens = toFiniteNumber(tokens.output_tokens ?? tokens.outputTokens);
   const reasoningTokens = toFiniteNumber(tokens.reasoning_tokens ?? tokens.reasoningTokens);
-  const cachedTokens = Math.max(
-    toFiniteNumber(tokens.cached_tokens ?? tokens.cachedTokens),
-    toFiniteNumber(tokens.cache_tokens ?? tokens.cacheTokens)
+  const cachedTokens = compatibleCachedTokens(
+    tokens.cached_tokens ?? tokens.cachedTokens,
+    tokens.cache_tokens ?? tokens.cacheTokens,
+    tokens.cache_read_tokens ?? tokens.cacheReadTokens,
+    tokens.cache_creation_tokens ?? tokens.cacheCreationTokens
+  );
+  const cacheReadTokens = Math.max(
+    toFiniteNumber(tokens.cache_read_tokens ?? tokens.cacheReadTokens),
+    0
+  );
+  const cacheCreationTokens = Math.max(
+    toFiniteNumber(tokens.cache_creation_tokens ?? tokens.cacheCreationTokens),
+    0
   );
 
-  return inputTokens + outputTokens + reasoningTokens + cachedTokens;
+  return (
+    inputTokens +
+    outputTokens +
+    reasoningTokens +
+    cachedTokens +
+    cacheReadTokens +
+    cacheCreationTokens
+  );
 }
 
 export function calculateCost(
@@ -411,11 +562,27 @@ export function calculateCost(
     Math.max(toFiniteNumber(detail.tokens.cached_tokens), 0),
     Math.max(toFiniteNumber(detail.tokens.cache_tokens), 0)
   );
+  const cacheReadTokens = Math.max(toFiniteNumber(detail.tokens.cache_read_tokens), 0);
+  const cacheCreationTokens = Math.max(toFiniteNumber(detail.tokens.cache_creation_tokens), 0);
+  const promptPrice = Number(price.prompt) || 0;
+  const completionPrice = Number(price.completion) || 0;
+  if (cacheReadTokens > 0 || cacheCreationTokens > 0) {
+    const cacheReadPrice = Number(price.cacheRead) || Number(price.cache) || 0;
+    const cacheCreationPrice = Number(price.cacheCreation) || promptPrice;
+    const promptTokens = Math.max(inputTokens - cachedTokens, 0);
+    const total =
+      (promptTokens / TOKENS_PER_PRICE_UNIT) * promptPrice +
+      (completionTokens / TOKENS_PER_PRICE_UNIT) * completionPrice +
+      (cachedTokens / TOKENS_PER_PRICE_UNIT) * (Number(price.cache) || 0) +
+      (cacheReadTokens / TOKENS_PER_PRICE_UNIT) * cacheReadPrice +
+      (cacheCreationTokens / TOKENS_PER_PRICE_UNIT) * cacheCreationPrice;
+    return Number.isFinite(total) && total > 0 ? total : 0;
+  }
+
   const promptTokens = Math.max(inputTokens - cachedTokens, 0);
-  const promptCost = (promptTokens / TOKENS_PER_PRICE_UNIT) * (Number(price.prompt) || 0);
+  const promptCost = (promptTokens / TOKENS_PER_PRICE_UNIT) * promptPrice;
+  const completionCost = (completionTokens / TOKENS_PER_PRICE_UNIT) * completionPrice;
   const cachedCost = (cachedTokens / TOKENS_PER_PRICE_UNIT) * (Number(price.cache) || 0);
-  const completionCost =
-    (completionTokens / TOKENS_PER_PRICE_UNIT) * (Number(price.completion) || 0);
   const total = promptCost + cachedCost + completionCost;
   return Number.isFinite(total) && total > 0 ? total : 0;
 }
@@ -437,12 +604,19 @@ export function loadModelPrices(): Record<string, ModelPrice> {
       const completion = toFiniteNumber(price.completion);
       const cacheRaw = Number(price.cache);
       const cache = Number.isFinite(cacheRaw) && cacheRaw >= 0 ? cacheRaw : prompt;
+      const cacheReadRaw = Number(price.cacheRead);
+      const cacheRead = Number.isFinite(cacheReadRaw) && cacheReadRaw >= 0 ? cacheReadRaw : 0;
+      const cacheCreationRaw = Number(price.cacheCreation);
+      const cacheCreation =
+        Number.isFinite(cacheCreationRaw) && cacheCreationRaw >= 0 ? cacheCreationRaw : 0;
 
-      if (prompt < 0 || completion < 0 || cache < 0) return;
+      if (prompt < 0 || completion < 0 || cache < 0 || cacheRead < 0 || cacheCreation < 0) return;
       normalized[model] = {
         prompt,
         completion,
         cache,
+        cacheRead,
+        cacheCreation,
         source: readDetailString(price.source),
         sourceModelId: readDetailString(price.sourceModelId),
         rawJson: readDetailString(price.rawJson),

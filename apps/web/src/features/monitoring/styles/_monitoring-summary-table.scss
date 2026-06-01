@@ -902,6 +902,10 @@
     background: var(--monitor-surface-hover);
   }
 
+  .table.realtimeTable tbody td {
+    overflow: visible;
+  }
+
   .innerTable {
     min-width: 940px;
   }
@@ -918,6 +922,162 @@
     font-size: 11px;
   }
 
+  .realtimeReasoningBadge {
+    display: inline;
+    color: var(--monitor-accent-strong);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+
+  .mutedCell {
+    color: var(--monitor-muted);
+  }
+
+  .realtimeFailureStatus {
+    position: relative;
+    display: inline-flex;
+    width: fit-content;
+    max-width: 100%;
+    align-items: center;
+    outline: none;
+  }
+
+  .realtimeFailureStatus::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 100%;
+    z-index: 19;
+    width: min(420px, calc(100vw - 48px));
+    height: 10px;
+  }
+
+  .realtimeFailureStatus:focus-visible .realtimeRequestStatus {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .realtimeRequestStatus {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 20px;
+    font-size: 12px;
+    font-weight: 750;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+
+  .realtimeRequestStatus::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+  }
+
+  .realtimeRequestStatusGood {
+    color: var(--monitor-green);
+  }
+
+  .realtimeRequestStatusBad {
+    color: var(--monitor-red);
+  }
+
+  .realtimeFailureTooltip {
+    position: absolute;
+    left: 0;
+    top: calc(100% + 4px);
+    z-index: 20;
+    display: grid;
+    gap: 8px;
+    width: max-content;
+    min-width: 220px;
+    max-width: min(420px, calc(100vw - 48px));
+    max-height: 240px;
+    overflow: auto;
+    padding: 10px 12px;
+    padding-right: 42px;
+    border: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
+    border-radius: 8px;
+    background: var(--monitor-surface-elevated);
+    box-shadow: var(--shadow-lg);
+    color: var(--monitor-ink);
+    font-size: 12px;
+    line-height: 1.45;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-4px);
+    transition:
+      opacity 0.12s ease,
+      transform 0.12s ease;
+    white-space: normal;
+    user-select: text;
+  }
+
+  .realtimeFailureTooltip::before {
+    content: '';
+    position: absolute;
+    left: 16px;
+    top: -5px;
+    width: 8px;
+    height: 8px;
+    border-left: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
+    border-top: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
+    background: var(--monitor-surface-elevated);
+    transform: rotate(45deg);
+  }
+
+  .realtimeFailureStatus:hover .realtimeFailureTooltip,
+  .realtimeFailureStatus:focus-visible .realtimeFailureTooltip,
+  .realtimeFailureStatus:focus-within .realtimeFailureTooltip {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+
+  .realtimeFailureCopyButton {
+    position: absolute;
+    right: 8px;
+    top: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--monitor-line) 84%, transparent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--monitor-surface) 88%, transparent);
+    color: var(--monitor-muted);
+    cursor: pointer;
+  }
+
+  .realtimeFailureCopyButton:hover,
+  .realtimeFailureCopyButton:focus-visible {
+    border-color: color-mix(in srgb, var(--monitor-accent) 36%, var(--monitor-line));
+    background: var(--monitor-surface-hover);
+    color: var(--monitor-accent-strong);
+  }
+
+  .realtimeFailureTooltipStatus {
+    color: var(--monitor-red);
+    font-size: 11px;
+    font-weight: 750;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+
+  .realtimeFailureTooltipBody {
+    overflow-wrap: anywhere;
+    color: var(--monitor-ink);
+    font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    white-space: pre-wrap;
+  }
+
   .monoCell {
     font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   }
@@ -932,34 +1092,6 @@
     display: flex;
     align-items: center;
     min-width: 70px;
-  }
-
-  .realtimeTable .statusBadge {
-    min-height: 30px;
-    padding: 0 12px;
-    border-radius: 10px;
-    font-size: 11px;
-  }
-
-  .realtimeTable .statusBadge.tonegood {
-    border-color: color-mix(in srgb, var(--monitor-green) 36%, var(--monitor-line));
-    background: color-mix(in srgb, var(--monitor-green) 14%, var(--monitor-surface));
-    color: var(--monitor-green);
-  }
-
-  .realtimeTable .statusBadge.tonebad {
-    border-color: color-mix(in srgb, var(--monitor-red) 36%, var(--monitor-line));
-    background: color-mix(in srgb, var(--monitor-red) 14%, var(--monitor-surface));
-    color: var(--monitor-red);
-  }
-
-  .realtimeTable .statusBadge::before {
-    content: '';
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: currentColor;
-    flex-shrink: 0;
   }
 
   .paginationBar {

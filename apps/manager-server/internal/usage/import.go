@@ -171,9 +171,16 @@ func eventFromExportedRecord(record map[string]any) (Event, bool, error) {
 		}
 	}
 
-	inputTokens, outputTokens, reasoningTokens, cachedTokens, cacheTokens, totalTokens := readTokenFields(record)
+	inputTokens, outputTokens, reasoningTokens, cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens, totalTokens := readTokenFields(record)
 	if totalTokens <= 0 {
-		totalTokens = inputTokens + outputTokens + reasoningTokens + maxInt64(cachedTokens, cacheTokens)
+		totalTokens = inputTokens + outputTokens + reasoningTokens +
+			CompatibleCachedTokens(cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens) +
+			maxInt64(cacheReadTokens, 0) + maxInt64(cacheCreationTokens, 0)
+	}
+	failStatusCode, failBody := readFailFields(record)
+	failSummary := readString(record, "fail_summary", "failSummary")
+	if failSummary == "" {
+		failSummary = FailSummaryFromBody(failBody)
 	}
 
 	event := Event{
@@ -199,15 +206,22 @@ func eventFromExportedRecord(record map[string]any) (Event, bool, error) {
 		AuthProviderSnapshot:  readString(record, "auth_provider_snapshot", "authProviderSnapshot"),
 		AuthProjectIDSnapshot: readString(record, "auth_project_id_snapshot", "authProjectIdSnapshot"),
 		AuthSnapshotAtMS:      readInt(record, "auth_snapshot_at_ms", "authSnapshotAtMs"),
+		ReasoningEffort:       readString(record, "reasoning_effort", "reasoningEffort"),
 		InputTokens:           inputTokens,
 		OutputTokens:          outputTokens,
 		ReasoningTokens:       reasoningTokens,
 		CachedTokens:          cachedTokens,
 		CacheTokens:           cacheTokens,
+		CacheReadTokens:       cacheReadTokens,
+		CacheCreationTokens:   cacheCreationTokens,
 		TotalTokens:           totalTokens,
 		LatencyMS:             readOptionalInt(record, "latency_ms", "latencyMs"),
+		TTFTMS:                readOptionalInt(record, "ttft_ms", "ttftMs", "time_to_first_token_ms", "timeToFirstTokenMs"),
 		Failed:                readBool(record, "failed", "is_failed", "isFailed"),
-		RawJSON:               readString(record, "raw_json", "rawJson"),
+		FailStatusCode:        int(failStatusCode),
+		FailSummary:           failSummary,
+		FailBody:              failBody,
+		RawJSON:               SafeRawJSON(readString(record, "raw_json", "rawJson")),
 		CreatedAtMS:           readInt(record, "created_at_ms", "createdAtMs"),
 	}
 	if event.Model == "" {
@@ -321,9 +335,16 @@ func eventFromLegacyDetail(
 	}
 	timestampMS, normalizedTimestamp := readTimestamp(detail)
 
-	inputTokens, outputTokens, reasoningTokens, cachedTokens, cacheTokens, totalTokens := readTokenFields(detail)
+	inputTokens, outputTokens, reasoningTokens, cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens, totalTokens := readTokenFields(detail)
 	if totalTokens <= 0 {
-		totalTokens = inputTokens + outputTokens + reasoningTokens + maxInt64(cachedTokens, cacheTokens)
+		totalTokens = inputTokens + outputTokens + reasoningTokens +
+			CompatibleCachedTokens(cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens) +
+			maxInt64(cacheReadTokens, 0) + maxInt64(cacheCreationTokens, 0)
+	}
+	failStatusCode, failBody := readFailFields(detail)
+	failSummary := readString(detail, "fail_summary", "failSummary")
+	if failSummary == "" {
+		failSummary = FailSummaryFromBody(failBody)
 	}
 
 	sourceRaw := readString(detail, "source", "api_key", "apiKey", "key", "account", "email")
@@ -355,14 +376,21 @@ func eventFromLegacyDetail(
 		AuthProviderSnapshot:  readString(detail, "auth_provider_snapshot", "authProviderSnapshot"),
 		AuthProjectIDSnapshot: readString(detail, "auth_project_id_snapshot", "authProjectIdSnapshot"),
 		AuthSnapshotAtMS:      readInt(detail, "auth_snapshot_at_ms", "authSnapshotAtMs"),
+		ReasoningEffort:       readString(detail, "reasoning_effort", "reasoningEffort"),
 		InputTokens:           inputTokens,
 		OutputTokens:          outputTokens,
 		ReasoningTokens:       reasoningTokens,
 		CachedTokens:          cachedTokens,
 		CacheTokens:           cacheTokens,
+		CacheReadTokens:       cacheReadTokens,
+		CacheCreationTokens:   cacheCreationTokens,
 		TotalTokens:           totalTokens,
 		LatencyMS:             readOptionalInt(detail, "latency_ms", "latencyMs", "duration_ms", "durationMs", "elapsed_ms", "elapsedMs"),
+		TTFTMS:                readOptionalInt(detail, "ttft_ms", "ttftMs", "time_to_first_token_ms", "timeToFirstTokenMs"),
 		Failed:                readFailed(detail),
+		FailStatusCode:        int(failStatusCode),
+		FailSummary:           failSummary,
+		FailBody:              failBody,
 		RawJSON:               rawJSON,
 		CreatedAtMS:           now,
 	}

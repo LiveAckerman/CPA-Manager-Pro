@@ -152,7 +152,8 @@ const buildSummaryFromStoredResult = (
   const deleteCount = results.filter((item) => item.action === 'delete').length;
   const disableCount = results.filter((item) => item.action === 'disable').length;
   const enableCount = results.filter((item) => item.action === 'enable').length;
-  const keepCount = results.length - deleteCount - disableCount - enableCount;
+  const reauthCount = results.filter((item) => item.action === 'reauth').length;
+  const keepCount = results.length - deleteCount - disableCount - enableCount - reauthCount;
   const plannedActionPreview = results
     .filter((item) => item.action !== 'keep')
     .slice(0, 10)
@@ -167,6 +168,7 @@ const buildSummaryFromStoredResult = (
     deleteCount,
     disableCount,
     enableCount,
+    reauthCount,
     keepCount,
     usedPercentThreshold:
       readNullableNumber(summary.usedPercentThreshold) ?? settings.usedPercentThreshold,

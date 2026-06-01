@@ -359,6 +359,9 @@ export const buildTaskBuckets = (rows: MonitoringEventRow[]): MonitoringTaskBuck
       models: Set<string>;
       endpoints: Set<string>;
       totalTokens: number;
+      cachedTokens: number;
+      cacheReadTokens: number;
+      cacheCreationTokens: number;
       totalCost: number;
       latencySum: number;
       latencyCount: number;
@@ -381,6 +384,9 @@ export const buildTaskBuckets = (rows: MonitoringEventRow[]): MonitoringTaskBuck
       models: new Set<string>(),
       endpoints: new Set<string>(),
       totalTokens: 0,
+      cachedTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
       totalCost: 0,
       latencySum: 0,
       latencyCount: 0,
@@ -392,6 +398,9 @@ export const buildTaskBuckets = (rows: MonitoringEventRow[]): MonitoringTaskBuck
     existing.models.add(row.model);
     existing.endpoints.add(row.endpointPath || row.endpoint);
     existing.totalTokens += row.totalTokens;
+    existing.cachedTokens += row.cachedTokens;
+    existing.cacheReadTokens += row.cacheReadTokens;
+    existing.cacheCreationTokens += row.cacheCreationTokens;
     existing.totalCost += row.totalCost;
     if (row.latencyMs !== null) {
       existing.latencySum += row.latencyMs;
@@ -417,6 +426,9 @@ export const buildTaskBuckets = (rows: MonitoringEventRow[]): MonitoringTaskBuck
       failed: item.failedCalls > 0,
       modelsText: joinUnique(item.models, 3),
       totalTokens: item.totalTokens,
+      cachedTokens: item.cachedTokens,
+      cacheReadTokens: item.cacheReadTokens,
+      cacheCreationTokens: item.cacheCreationTokens,
       totalCost: item.totalCost,
       averageLatencyMs: item.latencyCount > 0 ? item.latencySum / item.latencyCount : null,
       maxLatencyMs: item.maxLatencyMs,

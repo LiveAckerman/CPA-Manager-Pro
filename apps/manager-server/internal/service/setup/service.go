@@ -37,13 +37,13 @@ type InfoResult struct {
 	Service            string `json:"service"`
 	Mode               string `json:"mode"`
 	StartedAt          int64  `json:"startedAt"`
-	Configured          bool   `json:"configured"`
-	AdminReady          bool   `json:"adminReady"`
-	ProjectInitialized  bool   `json:"projectInitialized"`
-	SetupRequired       bool   `json:"setupRequired"`
-	MigrationStatus     string `json:"migrationStatus,omitempty"`
-	DataKeyReady        bool   `json:"dataKeyReady"`
-	HasHistoricalData   bool   `json:"hasHistoricalData"`
+	Configured         bool   `json:"configured"`
+	AdminReady         bool   `json:"adminReady"`
+	ProjectInitialized bool   `json:"projectInitialized"`
+	SetupRequired      bool   `json:"setupRequired"`
+	MigrationStatus    string `json:"migrationStatus,omitempty"`
+	DataKeyReady       bool   `json:"dataKeyReady"`
+	HasHistoricalData  bool   `json:"hasHistoricalData"`
 }
 
 type Service struct {
@@ -80,20 +80,20 @@ func (s *Service) Info(ctx context.Context) (InfoResult, error) {
 		return InfoResult{}, err
 	}
 	projectInitialized := ok && setup.CPAUpstreamURL != "" && setup.ManagementKey != ""
-	if bootstrapStateOK {
+	if bootstrapStateOK && !projectInitialized {
 		projectInitialized = bootstrapState.ProjectInitialized
 	}
 	return InfoResult{
 		Service:            s.serviceID,
 		Mode:               "embedded",
 		StartedAt:          s.startedAt,
-		Configured:          projectInitialized,
-		AdminReady:          adminReady,
-		ProjectInitialized:  projectInitialized,
-		SetupRequired:       adminReady && !projectInitialized,
-		MigrationStatus:     bootstrapState.Status,
-		DataKeyReady:        bootstrapState.DataKeyReady,
-		HasHistoricalData:   bootstrapState.HasHistoricalData,
+		Configured:         projectInitialized,
+		AdminReady:         adminReady,
+		ProjectInitialized: projectInitialized,
+		SetupRequired:      adminReady && !projectInitialized,
+		MigrationStatus:    bootstrapState.Status,
+		DataKeyReady:       bootstrapState.DataKeyReady,
+		HasHistoricalData:  bootstrapState.HasHistoricalData,
 	}, nil
 }
 
@@ -185,12 +185,32 @@ func (s *Service) Setup(ctx context.Context, req Request, _ string) (Result, err
 	if err := s.store.SaveManagerConfig(ctx, managerCfg); err != nil {
 		return Result{}, err
 	}
+	if err := s.markBootstrapReady(ctx); err != nil {
+		return Result{}, err
+	}
 	if requestMonitoringEnabled {
 		_ = s.collector.Start(context.Background(), managerCfg)
 	} else {
 		_ = s.collector.Stop(context.Background())
 	}
 	return Result{OK: true, Upstream: setup.CPAUpstreamURL}, nil
+}
+
+func (s *Service) markBootstrapReady(ctx context.Context) error {
+	state, ok, err := s.store.LoadBootstrapState(ctx)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		state = store.BootstrapState{Version: 1}
+	} else if state.Version == 0 {
+		state.Version = 1
+	}
+	state.Status = "ready"
+	state.AdminReady = true
+	state.ProjectInitialized = true
+	state.DataKeyReady = true
+	return s.store.SaveBootstrapState(ctx, state)
 }
 
 func setupDiffers(existing store.Setup, req Request) bool {

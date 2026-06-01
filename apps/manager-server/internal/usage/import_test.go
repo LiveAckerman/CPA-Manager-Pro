@@ -204,6 +204,217 @@ func TestNormalizeRawReadsProjectID(t *testing.T) {
 	}
 }
 
+func TestNormalizeRawReadsCPA7118UsageFields(t *testing.T) {
+	payload := `{
+	  "timestamp": "2026-04-25T00:00:00Z",
+	  "latency_ms": 1500,
+	  "ttft_ms": 450,
+	  "source": "user@example.com",
+	  "auth_index": "0",
+	  "tokens": {
+	    "input_tokens": 10,
+	    "output_tokens": 20,
+	    "reasoning_tokens": 3,
+	    "cached_tokens": 5,
+	    "cache_read_tokens": 4,
+	    "cache_creation_tokens": 1,
+	    "total_tokens": 33
+	  },
+	  "failed": true,
+	  "fail": {
+	    "status_code": 429,
+	    "body": "rate limit exceeded"
+	  },
+	  "provider": "openai",
+	  "model": "gpt-5.4",
+	  "alias": "client-gpt",
+	  "endpoint": "POST /v1/chat/completions",
+	  "auth_type": "apikey",
+	  "api_key": "test-key",
+	  "request_id": "ctx-request-id",
+	  "reasoning_effort": "medium",
+	  "response_headers": {
+	    "Retry-After": ["30"]
+	  }
+	}`
+	event, err := NormalizeRaw([]byte(payload))
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if event.RequestID != "ctx-request-id" || event.ReasoningEffort != "medium" {
+		t.Fatalf("event identity/effort = %#v", event)
+	}
+	if event.InputTokens != 10 || event.OutputTokens != 20 || event.ReasoningTokens != 3 ||
+		event.CachedTokens != 5 || event.CacheReadTokens != 4 || event.CacheCreationTokens != 1 ||
+		event.TotalTokens != 33 {
+		t.Fatalf("event tokens = %#v", event)
+	}
+	if !event.Failed || event.FailStatusCode != 429 || event.FailBody != "rate limit exceeded" {
+		t.Fatalf("event failure = %#v", event)
+	}
+	if event.FailSummary != "rate limit exceeded" {
+		t.Fatalf("fail summary = %q", event.FailSummary)
+	}
+	if event.LatencyMS == nil || *event.LatencyMS != 1500 {
+		t.Fatalf("latency = %#v", event.LatencyMS)
+	}
+	if event.TTFTMS == nil || *event.TTFTMS != 450 {
+		t.Fatalf("ttft = %#v", event.TTFTMS)
+	}
+
+	legacyPayload := BuildPayload([]Event{event})
+	api := legacyPayload.APIs["POST /v1/chat/completions"]
+	if api == nil {
+		t.Fatalf("missing endpoint aggregate")
+	}
+	modelEntry := api.Models["client-gpt"]
+	if modelEntry == nil || len(modelEntry.Details) != 1 {
+		t.Fatalf("model details = %#v", api.Models)
+	}
+	detail := modelEntry.Details[0]
+	if detail.ReasoningEffort != "medium" || detail.Tokens.CacheReadTokens != 4 ||
+		detail.Tokens.CacheCreationTokens != 1 || detail.FailStatusCode != 429 ||
+		detail.Tokens.CachedTokens != 0 || detail.Tokens.CacheTokens != 0 ||
+		detail.FailSummary != "rate limit exceeded" || detail.TTFTMS == nil ||
+		*detail.TTFTMS != 450 {
+		t.Fatalf("detail = %#v", detail)
+	}
+}
+
+func TestCompatibleCachedTokensDoesNotDoubleCountFineGrainedCache(t *testing.T) {
+	if got := CompatibleCachedTokens(5, 0, 4, 1); got != 0 {
+		t.Fatalf("fully mirrored cached tokens = %d, want 0", got)
+	}
+	if got := CompatibleCachedTokens(10, 0, 4, 1); got != 5 {
+		t.Fatalf("partial compatible cached tokens = %d, want 5", got)
+	}
+	if got := CompatibleCachedTokens(0, 8, 3, 0); got != 5 {
+		t.Fatalf("cache_tokens compatible fallback = %d, want 5", got)
+	}
+}
+
+func TestNormalizeRawFallbackTotalIncludesFineGrainedCache(t *testing.T) {
+	payload := `{
+	  "timestamp": "2026-04-25T00:00:00Z",
+	  "source": "user@example.com",
+	  "tokens": {
+	    "input_tokens": 10,
+	    "output_tokens": 20,
+	    "reasoning_tokens": 3,
+	    "cached_tokens": 10,
+	    "cache_read_tokens": 4,
+	    "cache_creation_tokens": 1
+	  },
+	  "model": "gpt-5.4",
+	  "endpoint": "POST /v1/chat/completions"
+	}`
+	event, err := NormalizeRaw([]byte(payload))
+	if err != nil {
+		t.Fatalf("normalize fallback total: %v", err)
+	}
+	if event.TotalTokens != 43 {
+		t.Fatalf("total tokens = %d, want 43", event.TotalTokens)
+	}
+}
+
+func TestNormalizeRawSanitizesFailBodyForSummaryAndRawJSON(t *testing.T) {
+	longBody := strings.Repeat("x", maxFailSummaryBytes+128)
+	payload := `{
+	  "timestamp": "2026-04-25T00:00:00Z",
+	  "source": "user@example.com",
+	  "tokens": {"input_tokens": 1, "total_tokens": 1},
+	  "failed": true,
+	  "fail": {
+	    "status_code": 500,
+	    "body": "Authorization: Bearer bearer-secret-12345\napi_key=sk-test-secret-value\naccess_token=access-secret\nCookie: session=secret\nalice@example.com ` + longBody + `"
+	  },
+	  "model": "gpt-5.4",
+	  "endpoint": "POST /v1/chat/completions"
+	}`
+	event, err := NormalizeRaw([]byte(payload))
+	if err != nil {
+		t.Fatalf("normalize sensitive fail body: %v", err)
+	}
+	if event.FailBody == "" || !strings.Contains(event.FailBody, "sk-test-secret-value") {
+		t.Fatalf("raw fail body should be preserved internally = %q", event.FailBody)
+	}
+	if event.FailSummary == "" || len(event.FailSummary) > maxFailSummaryBytes+3 {
+		t.Fatalf("fail summary length/content = %d %q", len(event.FailSummary), event.FailSummary)
+	}
+	for _, secret := range []string{
+		"Bearer bearer-secret-12345",
+		"sk-test-secret-value",
+		"access-secret",
+		"session=secret",
+		"alice@example.com",
+	} {
+		if strings.Contains(event.FailSummary, secret) {
+			t.Fatalf("fail summary contains secret %q: %q", secret, event.FailSummary)
+		}
+		if strings.Contains(event.RawJSON, secret) {
+			t.Fatalf("raw json contains secret %q: %q", secret, event.RawJSON)
+		}
+	}
+	if !strings.Contains(event.FailSummary, "[redacted]") {
+		t.Fatalf("fail summary missing redaction marker: %q", event.FailSummary)
+	}
+}
+
+func TestFailSummaryRedactionPreservesDiagnosticText(t *testing.T) {
+	body := `AImproved fallback AIServer down {"cookie":"session=secret","status":"401","detail":"upstream denied","retry_after":30}`
+	summary := FailSummaryFromBody(body)
+	for _, want := range []string{
+		"AImproved fallback",
+		"AIServer down",
+		`"status":"401"`,
+		`"detail":"upstream denied"`,
+		`"retry_after":30`,
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q: %q", want, summary)
+		}
+	}
+	if strings.Contains(summary, "session=secret") {
+		t.Fatalf("summary leaked cookie value: %q", summary)
+	}
+}
+
+func TestNormalizeRawAcceptsPre7118UsagePayload(t *testing.T) {
+	payload := `{
+	  "timestamp": "2026-04-25T00:00:00Z",
+	  "latency_ms": 1500,
+	  "source": "user@example.com",
+	  "auth_index": "0",
+	  "tokens": {
+	    "input_tokens": 10,
+	    "output_tokens": 20,
+	    "reasoning_tokens": 3,
+	    "cached_tokens": 5,
+	    "total_tokens": 33
+	  },
+	  "failed": false,
+	  "provider": "openai",
+	  "model": "gpt-5.4",
+	  "endpoint": "POST /v1/chat/completions",
+	  "auth_type": "apikey",
+	  "api_key": "test-key",
+	  "request_id": "ctx-request-id"
+	}`
+	event, err := NormalizeRaw([]byte(payload))
+	if err != nil {
+		t.Fatalf("normalize old payload: %v", err)
+	}
+	if event.ReasoningEffort != "" || event.CacheReadTokens != 0 ||
+		event.CacheCreationTokens != 0 || event.FailStatusCode != 0 || event.FailBody != "" ||
+		event.FailSummary != "" {
+		t.Fatalf("old payload defaults = %#v", event)
+	}
+	if event.InputTokens != 10 || event.OutputTokens != 20 || event.ReasoningTokens != 3 ||
+		event.CachedTokens != 5 || event.TotalTokens != 33 {
+		t.Fatalf("old payload tokens = %#v", event)
+	}
+}
+
 func TestNormalizeRawSplitsAliasAndResolvedModel(t *testing.T) {
 	payload := `{
 	  "timestamp": "2026-05-19T10:00:00Z",

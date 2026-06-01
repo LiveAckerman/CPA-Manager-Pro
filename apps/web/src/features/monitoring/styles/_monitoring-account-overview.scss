@@ -538,11 +538,10 @@
 
   .tokenStructureRowList {
     display: grid;
-    grid-template-rows: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 8px;
     min-width: 0;
     min-height: 0;
-    max-width: 320px;
     width: 100%;
   }
 

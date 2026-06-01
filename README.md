@@ -18,7 +18,7 @@ Since v6.10.0, CPA no longer includes built-in usage statistics. This project no
 CPA Manager Pro is the recommended successor to CPA-Manager. It combines the CPA management panel with a Docker-ready Manager Server, admin-key protected full-panel mode, encrypted CPA Management Key storage, server-backed analytics, model pricing, API key aliases, dashboard cards, and Codex account inspection.
 
 - **CPA Main project**: https://github.com/router-for-me/CLIProxyAPI
-- **Recommended CPA version**: >= v7.1.0
+- **Recommended CPA version**: >= v7.1.18
 - **Minimum CPA version for HTTP usage queue**: >= v6.10.8
 
 ## Panel Preview
@@ -55,7 +55,8 @@ Request statistics require the CPA usage queue:
 - CPA Management must be enabled because the usage queue uses the same availability and CPA Management Key as `/v0/management`.
 - Request monitoring requires CPA usage publishing: set `usage-statistics-enabled: true`, or submit `{ "value": true }` to `PUT /usage-statistics-enabled`. CPA Manager Pro enables this automatically when request monitoring is enabled during setup or configuration save.
 - Disabling CPAM request monitoring only stops the Manager Server collector. It does not automatically disable CPA usage publishing or clear the CPA usage queue. If CPA usage publishing remains enabled, re-enabling request monitoring within the queue retention window may collect events retained while the collector was stopped.
-- CPA `v7.1.0+` is recommended for current panel capabilities. CPA `v6.10.8+` already exposes the HTTP usage queue endpoint `/v0/management/usage-queue`, which can pass through regular HTTP reverse proxies.
+- CPA `v7.1.18+` is recommended for current panel capabilities and the full Redis usage metadata set used by newer monitoring views: request-side `reasoning_effort`, `tokens.cache_read_tokens`, `tokens.cache_creation_tokens`, `fail.status_code`, and `fail.body`. CPA `v6.10.8+` already exposes the HTTP usage queue endpoint `/v0/management/usage-queue`, which can pass through regular HTTP reverse proxies. Older compatible CPA versions omit these optional fields; CPA Manager Plus still imports and collects those events, with missing string fields shown as empty/unknown and missing numeric fields treated as `0`.
+- `reasoning_effort` is the request-side reasoning configuration. It is not actual reasoning token usage; actual reasoning consumption is still reported by `tokens.reasoning_tokens`.
 - Manager Server `auto` mode tries RESP Pub/Sub (`subscribe`) first, then the HTTP usage queue, then RESP pop mode for older CPA versions. RESP transports listen on the CPA API port, usually `8317`, and cannot pass through a regular HTTP reverse proxy.
 - CPA keeps queue items in memory for `redis-usage-queue-retention-seconds`, default `60` seconds and maximum `3600` seconds. Keep Manager Server running continuously.
 - Manager Server `pollIntervalMs` must be less than or equal to the CPA queue retention window converted to milliseconds. Saves are rejected when the collector would poll too slowly and risk expired queue items.
@@ -367,6 +368,8 @@ When upgrading from the old CPA-Manager project, read [Migration from CPA-Manage
 After full Docker setup, `/status`, usage, model-pricing, and `/v0/management/*` proxy endpoints require the admin key as a Bearer token. In external CPA panel mode, these Manager Server endpoints also accept the CPA Management Key so the CPA panel mode does not need a second Manager Server login.
 
 Usage import accepts two file families: JSONL/NDJSON event files exported by Manager Server, and legacy JSON snapshots produced by older CPA `/usage/export`. Legacy JSON can be converted only when `usage.apis.*.models.*.details[]` request details are present. Files that contain only aggregate totals are rejected because request-level monitoring data cannot be reconstructed. Legacy import is a migration/recovery path, not a perfect continuation of newly collected Manager Server data: old files may miss metadata such as `api_key_hash`, channel, request ID, method/path, latency, cache tokens, or failure reason, so account matching, API Key level analysis, and detail accuracy may be lower. Importing legacy files affects totals, trend charts, and account/key breakdowns; use a test or backup database first when accuracy matters.
+
+Failure bodies from CPA usage events are treated as sensitive diagnostics. Manager Server keeps the raw `fail_body` only in the local SQLite database for internal troubleshooting, while normal APIs, compatible usage payloads, and JSONL exports expose only `fail_summary`, which is redacted and truncated. JSONL exports intentionally omit `raw_json` and raw `fail_body`; imports remain compatible with older exports and snapshots.
 
 ## Feature Overview
 

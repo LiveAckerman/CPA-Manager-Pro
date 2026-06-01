@@ -48,6 +48,14 @@ func TestStoreCompatMigratesLegacyUsageEventSchema(t *testing.T) {
 		_ = raw.Close()
 		t.Fatalf("create legacy usage_events: %v", err)
 	}
+	if _, err := raw.Exec(`insert into usage_events (
+		event_hash, timestamp_ms, timestamp, model, endpoint, input_tokens, output_tokens, total_tokens, created_at_ms
+	) values (
+		'pre-migration-event', 1777999999000, '2026-05-05T23:59:59Z', 'gpt-old', 'POST /v1/chat/completions', 1, 2, 3, 1777999999001
+	)`); err != nil {
+		_ = raw.Close()
+		t.Fatalf("insert legacy usage event: %v", err)
+	}
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close raw sqlite: %v", err)
 	}
@@ -67,12 +75,39 @@ func TestStoreCompatMigratesLegacyUsageEventSchema(t *testing.T) {
 		"auth_file_snapshot",
 		"auth_provider_snapshot",
 		"auth_snapshot_at_ms",
+		"reasoning_effort",
+		"cache_read_tokens",
+		"cache_creation_tokens",
+		"ttft_ms",
+		"fail_status_code",
+		"fail_summary",
+		"fail_body",
 	} {
 		if !columns[column] {
 			t.Fatalf("missing migrated column %s in %#v", column, columns)
 		}
 	}
+	var cacheReadTokens, cacheCreationTokens int64
+	var failStatusCode, ttftMS sql.NullInt64
+	var failSummary, failBody sql.NullString
+	if err := store.db.QueryRow(`select cache_read_tokens, cache_creation_tokens, ttft_ms, fail_status_code, fail_summary, fail_body
+		from usage_events where event_hash = 'pre-migration-event'`).Scan(
+		&cacheReadTokens,
+		&cacheCreationTokens,
+		&ttftMS,
+		&failStatusCode,
+		&failSummary,
+		&failBody,
+	); err != nil {
+		t.Fatalf("read pre-migration defaults: %v", err)
+	}
+	if cacheReadTokens != 0 || cacheCreationTokens != 0 || ttftMS.Valid || failStatusCode.Valid ||
+		failSummary.Valid || failBody.Valid {
+		t.Fatalf("pre-migration defaults read=%d creation=%d ttft=%#v status=%#v summary=%#v body=%#v",
+			cacheReadTokens, cacheCreationTokens, ttftMS, failStatusCode, failSummary, failBody)
+	}
 
+	ttft := int64(320)
 	_, err = store.InsertEvents(context.Background(), []usage.Event{
 		{
 			EventHash:            "legacy-schema-event",
@@ -85,9 +120,17 @@ func TestStoreCompatMigratesLegacyUsageEventSchema(t *testing.T) {
 			AuthFileSnapshot:     "alice.json",
 			AuthProviderSnapshot: "codex",
 			AuthSnapshotAtMS:     1_778_000_000_100,
+			ReasoningEffort:      "medium",
 			InputTokens:          1,
 			OutputTokens:         2,
+			CacheReadTokens:      4,
+			CacheCreationTokens:  1,
 			TotalTokens:          3,
+			TTFTMS:               &ttft,
+			Failed:               true,
+			FailStatusCode:       429,
+			FailSummary:          "rate limit exceeded",
+			FailBody:             "rate limit exceeded",
 			CreatedAtMS:          1_778_000_000_200,
 		},
 	})
@@ -98,8 +141,21 @@ func TestStoreCompatMigratesLegacyUsageEventSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recent after migration: %v", err)
 	}
-	if len(events) != 1 || events[0].AccountSnapshot != "alice@example.com" || events[0].AuthProviderSnapshot != "codex" {
-		t.Fatalf("migrated event = %#v", events)
+	var migrated usage.Event
+	for _, event := range events {
+		if event.EventHash == "legacy-schema-event" {
+			migrated = event
+			break
+		}
+	}
+	if migrated.EventHash == "" || migrated.AccountSnapshot != "alice@example.com" ||
+		migrated.AuthProviderSnapshot != "codex" || migrated.ReasoningEffort != "medium" ||
+		migrated.CacheReadTokens != 4 || migrated.CacheCreationTokens != 1 ||
+		migrated.TTFTMS == nil || *migrated.TTFTMS != 320 ||
+		migrated.FailStatusCode != 429 || migrated.FailSummary != "rate limit exceeded" ||
+		migrated.FailBody != "" ||
+		!migrated.Failed {
+		t.Fatalf("migrated event = %#v in %#v", migrated, events)
 	}
 }
 
@@ -201,6 +257,85 @@ func TestStoreCompatSettingsUsageAndExport(t *testing.T) {
 	if first.EventHash != "event-a" {
 		t.Fatalf("first exported hash = %q, want event-a", first.EventHash)
 	}
+	if first.FailBody != "" || first.RawJSON != "" {
+		t.Fatalf("export should omit raw sensitive fields: %#v", first)
+	}
+}
+
+func TestRecentEventsPreservesRawCachedTokens(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	event := compatStoreEvent("raw-cache", 1)
+	event.CachedTokens = 10
+	event.CacheTokens = 10
+	event.CacheReadTokens = 4
+	event.CacheCreationTokens = 1
+	event.TotalTokens = 43
+	if _, err := db.InsertEvents(context.Background(), []usage.Event{event}); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+
+	events, err := db.RecentEvents(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("recent events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %#v", events)
+	}
+	if events[0].CachedTokens != 10 || events[0].CacheTokens != 10 ||
+		events[0].CacheReadTokens != 4 || events[0].CacheCreationTokens != 1 {
+		t.Fatalf("recent event cache fields = %#v", events[0])
+	}
+
+	exported, err := db.ExportJSONL(context.Background())
+	if err != nil {
+		t.Fatalf("export jsonl: %v", err)
+	}
+	var exportedEvent usage.Event
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(exported))), &exportedEvent); err != nil {
+		t.Fatalf("decode export: %v", err)
+	}
+	if exportedEvent.CachedTokens != 10 || exportedEvent.CacheReadTokens != 4 ||
+		exportedEvent.CacheCreationTokens != 1 {
+		t.Fatalf("exported cache fields = %#v", exportedEvent)
+	}
+}
+
+func TestInsertEventsSanitizesImportedFailSummary(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	event := compatStoreEvent("unsafe-summary", 1)
+	event.Failed = true
+	event.FailStatusCode = 500
+	event.FailSummary = "Authorization: Bearer bearer-secret-12345 api_key=sk-test-secret-value"
+	if _, err := db.InsertEvents(context.Background(), []usage.Event{event}); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+
+	events, err := db.RecentEvents(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("recent events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %#v", events)
+	}
+	if strings.Contains(events[0].FailSummary, "bearer-secret-12345") ||
+		strings.Contains(events[0].FailSummary, "sk-test-secret-value") ||
+		!strings.Contains(events[0].FailSummary, "[redacted]") {
+		t.Fatalf("fail summary not sanitized: %#v", events[0])
+	}
 }
 
 func TestStoreCompatModelPricesAndAPIKeyAliases(t *testing.T) {
@@ -213,7 +348,7 @@ func TestStoreCompatModelPricesAndAPIKeyAliases(t *testing.T) {
 	})
 
 	err = db.SaveModelPrices(context.Background(), map[string]ModelPrice{
-		"gpt-a": {Prompt: 1, Completion: 2, Cache: 0.5},
+		"gpt-a": {Prompt: 1, Completion: 2, Cache: 0.5, CacheRead: 0.25, CacheCreation: 1.5},
 		"gpt-b": {Prompt: 3, Completion: 4, Cache: 0},
 	})
 	if err != nil {
@@ -223,12 +358,13 @@ func TestStoreCompatModelPricesAndAPIKeyAliases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load model prices: %v", err)
 	}
-	if len(prices) != 2 || prices["gpt-a"].Prompt != 1 || prices["gpt-b"].Completion != 4 {
+	if len(prices) != 2 || prices["gpt-a"].Prompt != 1 || prices["gpt-a"].CacheRead != 0.25 ||
+		prices["gpt-a"].CacheCreation != 1.5 || prices["gpt-b"].Completion != 4 {
 		t.Fatalf("prices = %#v", prices)
 	}
 
 	result, err := db.UpsertSyncedModelPrices(context.Background(), map[string]ModelPrice{
-		"gpt-a": {Prompt: 5, Completion: 6, Cache: 1, Source: "litellm"},
+		"gpt-a": {Prompt: 5, Completion: 6, Cache: 1, CacheRead: 0.75, CacheCreation: 4, Source: "litellm"},
 		"bad":   {Prompt: -1, Completion: 0, Cache: 0},
 	})
 	if err != nil {
@@ -241,7 +377,9 @@ func TestStoreCompatModelPricesAndAPIKeyAliases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload model prices: %v", err)
 	}
-	if prices["gpt-a"].Prompt != 5 || prices["gpt-a"].SyncedAtMS == nil || prices["gpt-a"].Source != "litellm" {
+	if prices["gpt-a"].Prompt != 5 || prices["gpt-a"].CacheRead != 0.75 ||
+		prices["gpt-a"].CacheCreation != 4 || prices["gpt-a"].SyncedAtMS == nil ||
+		prices["gpt-a"].Source != "litellm" {
 		t.Fatalf("synced price = %#v", prices["gpt-a"])
 	}
 

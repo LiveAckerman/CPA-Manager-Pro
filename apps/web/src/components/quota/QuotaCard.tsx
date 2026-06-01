@@ -84,7 +84,10 @@ export function QuotaCard<TState extends QuotaStatusState>({
   const { t } = useTranslation();
 
   const displayType = item.type || item.provider || defaultType;
-  const typeColorSet = TYPE_COLORS[displayType] || TYPE_COLORS.unknown;
+  const typeColorKey = String(displayType).trim().toLowerCase().replace(/_/g, '-');
+  const normalizedTypeColorKey =
+    typeColorKey === 'x-ai' || typeColorKey === 'grok' ? 'xai' : typeColorKey;
+  const typeColorSet = TYPE_COLORS[normalizedTypeColorKey] || TYPE_COLORS.unknown;
   const typeColor: ThemeColors =
     resolvedTheme === 'dark' && typeColorSet.dark ? typeColorSet.dark : typeColorSet.light;
 

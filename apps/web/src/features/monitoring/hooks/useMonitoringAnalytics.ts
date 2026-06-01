@@ -19,6 +19,7 @@ export interface UseMonitoringAnalyticsParams {
   fromMs?: number | null;
   toMs?: number | null;
   nowMs?: number;
+  dataScopeKey?: string;
   searchQuery?: string;
   searchApiKeyHash?: string;
   filters?: MonitoringAnalyticsFilters;
@@ -36,6 +37,7 @@ export interface UseMonitoringAnalyticsReturn {
   loading: boolean;
   error: string;
   data: MonitoringAnalyticsResponse | null;
+  dataStale: boolean;
   lastRefreshedAt: Date | null;
   serviceBase: string;
   unavailableReason: RequestMonitoringUnavailableReason | '';
@@ -53,6 +55,7 @@ export function useMonitoringAnalytics({
   fromMs,
   toMs,
   nowMs,
+  dataScopeKey,
   searchQuery,
   searchApiKeyHash,
   filters,
@@ -63,6 +66,7 @@ export function useMonitoringAnalytics({
   const managementKey = useAuthStore((state) => state.managementKey);
   const availability = useRequestMonitoringAvailability();
   const [data, setData] = useState<MonitoringAnalyticsResponse | null>(null);
+  const [dataScopeStateKey, setDataScopeStateKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
@@ -114,6 +118,7 @@ export function useMonitoringAnalytics({
   }, [eventsPageKey, filtersKey, fromMs, includeKey, nowMs, searchApiKeyHash, searchQuery, toMs]);
 
   const requestKey = useMemo(() => (request ? stableJson(request) : ''), [request]);
+  const activeDataScopeKey = dataScopeKey || requestKey;
   const serviceBase = availability.serviceBase;
   const enabled = availability.available && Boolean(serviceBase) && Boolean(request);
 
@@ -122,6 +127,7 @@ export function useMonitoringAnalytics({
       if (!enabled || !request || !serviceBase) {
         requestIdRef.current += 1;
         setData(null);
+        setDataScopeStateKey('');
         setLastRefreshedAt(null);
         setLoading(false);
         return;
@@ -145,9 +151,14 @@ export function useMonitoringAnalytics({
       setError('');
 
       try {
-        const response = await monitoringAnalyticsApi.getAnalytics(serviceBase, managementKey, request);
+        const response = await monitoringAnalyticsApi.getAnalytics(
+          serviceBase,
+          managementKey,
+          request
+        );
         if (requestIdRef.current !== requestId) return;
         setData(response);
+        setDataScopeStateKey(activeDataScopeKey);
         setLastRefreshedAt(new Date());
       } catch (err) {
         if (requestIdRef.current !== requestId) return;
@@ -158,7 +169,7 @@ export function useMonitoringAnalytics({
         }
       }
     },
-    [enabled, managementKey, request, requestKey, serviceBase, throttleMs]
+    [activeDataScopeKey, enabled, managementKey, request, requestKey, serviceBase, throttleMs]
   );
 
   useEffect(() => {
@@ -168,12 +179,16 @@ export function useMonitoringAnalytics({
     void refresh({ force: true });
   }, [availability.checking, refresh]);
 
+  const dataStale = Boolean(dataScopeKey && data && dataScopeStateKey !== activeDataScopeKey);
+  const scopedData = dataScopeKey || dataScopeStateKey === activeDataScopeKey ? data : null;
+
   return useMemo(
     () => ({
       enabled,
       loading: availability.checking || loading,
       error,
-      data,
+      data: scopedData,
+      dataStale,
       lastRefreshedAt,
       serviceBase,
       unavailableReason: availability.reason,
@@ -182,12 +197,13 @@ export function useMonitoringAnalytics({
     [
       availability.checking,
       availability.reason,
-      data,
       enabled,
       error,
+      dataStale,
       lastRefreshedAt,
       loading,
       refresh,
+      scopedData,
       serviceBase,
     ]
   );

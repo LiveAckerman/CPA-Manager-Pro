@@ -291,8 +291,9 @@ func fetchLiteLLMModelPrices(ctx context.Context, syncURL string, client *http.C
 	for modelID, entry := range raw {
 		promptCost, hasPrompt := readFloat(entry, "input_cost_per_token")
 		completionCost, hasCompletion := readFloat(entry, "output_cost_per_token")
-		cacheCost, hasCache := readFloat(entry, "cache_read_input_token_cost")
-		if !hasPrompt && !hasCompletion && !hasCache {
+		cacheReadCost, hasCacheRead := readFirstFloat(entry, "cache_read_input_token_cost", "input_cache_read")
+		cacheCreationCost, hasCacheCreation := readFirstFloat(entry, "cache_creation_input_token_cost", "cache_write_input_token_cost", "input_cache_write", "input_cache_creation")
+		if !hasPrompt && !hasCompletion && !hasCacheRead && !hasCacheCreation {
 			skipped++
 			continue
 		}
@@ -300,7 +301,9 @@ func fetchLiteLLMModelPrices(ctx context.Context, syncURL string, client *http.C
 		prices[modelID] = store.ModelPrice{
 			Prompt:        promptCost * 1_000_000,
 			Completion:    completionCost * 1_000_000,
-			Cache:         cacheCost * 1_000_000,
+			Cache:         cacheReadCost * 1_000_000,
+			CacheRead:     cacheReadCost * 1_000_000,
+			CacheCreation: cacheCreationCost * 1_000_000,
 			Source:        SyncSourceLiteLLM,
 			SourceModelID: modelID,
 			RawJSON:       string(rawEntry),
@@ -347,11 +350,9 @@ func fetchOpenRouterModelPrices(ctx context.Context, syncURL string, client *htt
 		}
 		promptCost, hasPrompt := readFloat(pricing, "prompt")
 		completionCost, hasCompletion := readFloat(pricing, "completion")
-		cacheCost, hasCache := readFloat(pricing, "input_cache_read")
-		if !hasCache {
-			cacheCost, hasCache = readFloat(pricing, "cache_read_input_token_cost")
-		}
-		if !hasPrompt && !hasCompletion && !hasCache {
+		cacheReadCost, hasCacheRead := readFirstFloat(pricing, "input_cache_read", "cache_read_input_token_cost")
+		cacheCreationCost, hasCacheCreation := readFirstFloat(pricing, "input_cache_write", "input_cache_creation", "cache_creation_input_token_cost", "cache_write_input_token_cost")
+		if !hasPrompt && !hasCompletion && !hasCacheRead && !hasCacheCreation {
 			skipped++
 			continue
 		}
@@ -359,7 +360,9 @@ func fetchOpenRouterModelPrices(ctx context.Context, syncURL string, client *htt
 		prices[modelID] = store.ModelPrice{
 			Prompt:        promptCost * 1_000_000,
 			Completion:    completionCost * 1_000_000,
-			Cache:         cacheCost * 1_000_000,
+			Cache:         cacheReadCost * 1_000_000,
+			CacheRead:     cacheReadCost * 1_000_000,
+			CacheCreation: cacheCreationCost * 1_000_000,
 			Source:        SyncSourceOpenRouter,
 			SourceModelID: modelID,
 			RawJSON:       string(rawEntry),
@@ -784,6 +787,15 @@ func readFloat(entry map[string]any, key string) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func readFirstFloat(entry map[string]any, keys ...string) (float64, bool) {
+	for _, key := range keys {
+		if value, ok := readFloat(entry, key); ok {
+			return value, true
+		}
+	}
+	return 0, false
 }
 
 func readString(entry map[string]any, key string) string {

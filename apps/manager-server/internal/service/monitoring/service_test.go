@@ -87,6 +87,154 @@ func TestAnalyticsBuildsIncludedSections(t *testing.T) {
 	}
 }
 
+func TestAnalyticsExposesCPA7118UsageFields(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_000_000_000)
+	toMS := fromMS + 60*60*1000
+	latency := int64(1500)
+	ttft := int64(450)
+	event := monitoringEvent("cpa-7118-fields", fromMS+1_000, "client-gpt", "auth-1", "source-a", true, 10, 20, 3, 5, 33, &latency)
+	event.ResolvedModel = "gpt-5.4"
+	event.ReasoningEffort = "medium"
+	event.CacheReadTokens = 4
+	event.CacheCreationTokens = 1
+	event.TTFTMS = &ttft
+	event.FailStatusCode = 429
+	event.FailBody = "rate limit exceeded"
+	event.FailSummary = "rate limit exceeded"
+
+	if _, err := db.InsertEvents(ctx, []usage.Event{event}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		NowMS:  toMS,
+		Include: Include{
+			Summary:     true,
+			ModelStats:  true,
+			TaskBuckets: true,
+			EventsPage:  &EventsPage{Limit: 10},
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+	if resp.Summary == nil || resp.Summary.CacheReadTokens != 4 ||
+		resp.Summary.CacheCreationTokens != 1 || resp.Summary.CachedTokens != 0 {
+		t.Fatalf("summary = %#v", resp.Summary)
+	}
+	if len(resp.TaskBuckets) != 1 || resp.TaskBuckets[0].CacheReadTokens != 4 ||
+		resp.TaskBuckets[0].CacheCreationTokens != 1 || resp.TaskBuckets[0].CachedTokens != 0 {
+		t.Fatalf("task buckets = %#v", resp.TaskBuckets)
+	}
+	if len(resp.ModelStats) != 1 || resp.ModelStats[0].CacheReadTokens != 4 ||
+		resp.ModelStats[0].CacheCreationTokens != 1 || resp.ModelStats[0].CachedTokens != 0 {
+		t.Fatalf("model stats = %#v", resp.ModelStats)
+	}
+	if resp.Events == nil || len(resp.Events.Items) != 1 {
+		t.Fatalf("events = %#v", resp.Events)
+	}
+	item := resp.Events.Items[0]
+	if item.ReasoningEffort != "medium" || item.CacheReadTokens != 4 ||
+		item.CacheCreationTokens != 1 || item.CachedTokens != 0 || item.FailStatusCode == nil ||
+		*item.FailStatusCode != 429 || item.FailSummary != "rate limit exceeded" ||
+		item.LatencyMS == nil || *item.LatencyMS != 1500 || item.TTFTMS == nil ||
+		*item.TTFTMS != 450 {
+		t.Fatalf("event item = %#v", item)
+	}
+}
+
+func TestAnalyticsKeepsCompatCachedSeparateFromFineGrainedCache(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_000_000_000)
+	toMS := fromMS + 60*60*1000
+	event := monitoringEvent("claude-cache-mirror", fromMS+1_000, "claude-sonnet", "auth-1", "source-a", false, 100, 20, 0, 500, 120, nil)
+	event.CacheReadTokens = 500
+
+	if _, err := db.InsertEvents(ctx, []usage.Event{event}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		NowMS:  toMS,
+		Include: Include{
+			Summary:     true,
+			ModelStats:  true,
+			TaskBuckets: true,
+			EventsPage:  &EventsPage{Limit: 10},
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+	if resp.Summary == nil || resp.Summary.CachedTokens != 0 || resp.Summary.CacheReadTokens != 500 {
+		t.Fatalf("summary cache fields = %#v", resp.Summary)
+	}
+	if len(resp.ModelStats) != 1 || resp.ModelStats[0].CachedTokens != 0 ||
+		resp.ModelStats[0].CacheReadTokens != 500 {
+		t.Fatalf("model stats cache fields = %#v", resp.ModelStats)
+	}
+	if len(resp.TaskBuckets) != 1 || resp.TaskBuckets[0].CachedTokens != 0 ||
+		resp.TaskBuckets[0].CacheReadTokens != 500 {
+		t.Fatalf("task buckets cache fields = %#v", resp.TaskBuckets)
+	}
+	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].CachedTokens != 0 ||
+		resp.Events.Items[0].CacheReadTokens != 500 {
+		t.Fatalf("events cache fields = %#v", resp.Events)
+	}
+}
+
+func TestAnalyticsDoesNotExposeOrSearchRawFailBody(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_000_000_000)
+	toMS := fromMS + 60*60*1000
+	event := monitoringEvent("raw-fail-body", fromMS+1_000, "client-gpt", "auth-1", "source-a", true, 1, 1, 0, 0, 2, nil)
+	event.FailStatusCode = 500
+	event.FailBody = "upstream stack raw-secret-marker sk-test-secret-value"
+	event.FailSummary = "upstream stack [redacted]"
+
+	if _, err := db.InsertEvents(ctx, []usage.Event{event}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS:      fromMS,
+		ToMS:        toMS,
+		SearchQuery: "raw-secret-marker",
+		Include:     Include{EventsPage: &EventsPage{Limit: 10}},
+	})
+	if err != nil {
+		t.Fatalf("analytics raw body search: %v", err)
+	}
+	if resp.Events != nil && len(resp.Events.Items) != 0 {
+		t.Fatalf("raw fail body should not be searchable: %#v", resp.Events)
+	}
+
+	resp, err = New(db).Analytics(ctx, Request{
+		FromMS:      fromMS,
+		ToMS:        toMS,
+		SearchQuery: "upstream stack",
+		Include:     Include{EventsPage: &EventsPage{Limit: 10}},
+	})
+	if err != nil {
+		t.Fatalf("analytics summary search: %v", err)
+	}
+	if resp.Events == nil || len(resp.Events.Items) != 1 {
+		t.Fatalf("summary search events = %#v", resp.Events)
+	}
+	item := resp.Events.Items[0]
+	if item.FailSummary != "upstream stack [redacted]" {
+		t.Fatalf("fail summary = %#v", item)
+	}
+}
+
 func TestAnalyticsUsesResolvedModelPricingInAggregates(t *testing.T) {
 	db := newMonitoringTestStore(t)
 	ctx := context.Background()
@@ -135,6 +283,10 @@ func TestAnalyticsUsesResolvedModelPricingInAggregates(t *testing.T) {
 	if len(resp.ChannelShare) != 1 || resp.ChannelShare[0].AuthIndex != "auth-1" ||
 		math.Abs(resp.ChannelShare[0].Cost-3) > 0.000001 {
 		t.Fatalf("channel share = %#v", resp.ChannelShare)
+	}
+	if resp.ChannelShare[0].Source != "user@example.com" ||
+		resp.ChannelShare[0].AccountSnapshot != "user@example.com" {
+		t.Fatalf("channel share snapshots = %#v", resp.ChannelShare[0])
 	}
 }
 
@@ -190,6 +342,59 @@ func TestAnalyticsAppliesFilters(t *testing.T) {
 	}
 	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != "filter-c" {
 		t.Fatalf("api key hash search events = %#v", resp.Events)
+	}
+}
+
+func TestAnalyticsAccountAndAPIKeyStatsUseFullFilteredScope(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_050_000_000)
+	toMS := fromMS + 60*60*1000
+
+	events := []usage.Event{
+		monitoringEvent("scope-a", fromMS+1_000, "gpt-a", "auth-1", "source-a", false, 10, 5, 0, 0, 15, nil),
+		monitoringEvent("scope-b", fromMS+2_000, "gpt-a", "auth-1", "source-a", false, 20, 6, 0, 0, 26, nil),
+		monitoringEvent("scope-c", fromMS+3_000, "gpt-b", "auth-1", "source-a", true, 1, 1, 0, 0, 2, nil),
+	}
+	for index := range events {
+		events[index].AccountSnapshot = "team@example.com"
+		events[index].AuthLabelSnapshot = "Team Account"
+		events[index].APIKeyHash = "client-key-hash"
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Include: Include{
+			Summary:      true,
+			AccountStats: true,
+			APIKeyStats:  true,
+			EventsPage:   &EventsPage{Limit: 1},
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+	if resp.Events == nil || len(resp.Events.Items) != 1 || !resp.Events.HasMore {
+		t.Fatalf("events page = %#v", resp.Events)
+	}
+	if resp.Summary == nil || resp.Summary.TotalCalls != 3 || resp.Summary.FailureCalls != 1 {
+		t.Fatalf("summary = %#v", resp.Summary)
+	}
+	if len(resp.AccountStats) != 1 || resp.AccountStats[0].Calls != 3 ||
+		resp.AccountStats[0].FailureCalls != 1 || resp.AccountStats[0].TotalTokens != 43 {
+		t.Fatalf("account stats = %#v", resp.AccountStats)
+	}
+	if len(resp.AccountStats[0].Models) != 2 {
+		t.Fatalf("account model stats = %#v", resp.AccountStats[0].Models)
+	}
+	if len(resp.APIKeyStats) != 1 || resp.APIKeyStats[0].APIKeyHash != "client-key-hash" ||
+		resp.APIKeyStats[0].Calls != 3 || resp.APIKeyStats[0].FailureCalls != 1 ||
+		resp.APIKeyStats[0].TotalTokens != 43 {
+		t.Fatalf("api key stats = %#v", resp.APIKeyStats)
 	}
 }
 
@@ -294,6 +499,118 @@ func TestAnalyticsAppliesFailedOnlyFilter(t *testing.T) {
 	}
 }
 
+func TestAnalyticsAppliesAccountFallbackFilter(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_200_000_000)
+	toMS := fromMS + 60*60*1000
+
+	alice := monitoringEvent("account-alice", fromMS+1_000, "gpt-a", "auth-a", "source-a", false, 10, 5, 0, 0, 15, nil)
+	alice.AccountSnapshot = "alice@example.com"
+	alice.AuthLabelSnapshot = "Alice Auth"
+	alice.Source = "alice-source"
+	bob := monitoringEvent("account-bob", fromMS+2_000, "gpt-b", "auth-b", "source-b", false, 10, 5, 0, 0, 15, nil)
+	bob.AccountSnapshot = "bob@example.com"
+	bob.AuthLabelSnapshot = "Bob Auth"
+	bob.Source = "bob-source"
+
+	if _, err := db.InsertEvents(ctx, []usage.Event{alice, bob}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Filters: Filters{
+			Accounts: []string{"alice@example.com"},
+		},
+		Include: Include{Summary: true, EventsPage: &EventsPage{Limit: 10}},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+	if resp.Summary == nil || resp.Summary.TotalCalls != 1 || resp.Summary.SuccessCalls != 1 {
+		t.Fatalf("summary = %#v", resp.Summary)
+	}
+	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != "account-alice" {
+		t.Fatalf("events = %#v", resp.Events)
+	}
+
+	resp, err = New(db).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Filters: Filters{
+			Accounts: []string{"Alice Auth"},
+		},
+		Include: Include{Summary: true, EventsPage: &EventsPage{Limit: 10}},
+	})
+	if err != nil {
+		t.Fatalf("analytics auth label account filter: %v", err)
+	}
+	if resp.Summary == nil || resp.Summary.TotalCalls != 1 {
+		t.Fatalf("auth label summary = %#v", resp.Summary)
+	}
+	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != "account-alice" {
+		t.Fatalf("auth label events = %#v", resp.Events)
+	}
+}
+
+func TestAnalyticsFilterOptionsIgnoreActiveScopeFilters(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_300_000_000)
+	toMS := fromMS + 60*60*1000
+
+	alice := monitoringEvent("option-alice", fromMS+1_000, "gpt-a", "auth-a", "source-a", false, 10, 5, 0, 0, 15, nil)
+	alice.AccountSnapshot = "alice@example.com"
+	alice.AuthLabelSnapshot = "Alice Auth"
+	alice.AuthProviderSnapshot = "codex"
+	alice.APIKeyHash = "key-alice"
+	bob := monitoringEvent("option-bob", fromMS+2_000, "gpt-b", "auth-b", "source-b", false, 10, 5, 0, 0, 15, nil)
+	bob.AccountSnapshot = "bob@example.com"
+	bob.AuthLabelSnapshot = "Bob Auth"
+	bob.AuthProviderSnapshot = "gemini"
+	bob.APIKeyHash = "key-bob"
+
+	if _, err := db.InsertEvents(ctx, []usage.Event{alice, bob}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Filters: Filters{
+			Models:   []string{"gpt-a"},
+			Accounts: []string{"alice@example.com"},
+		},
+		Include: Include{
+			Summary:       true,
+			FilterOptions: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+	if resp.Summary == nil || resp.Summary.TotalCalls != 1 {
+		t.Fatalf("summary should respect active filters: %#v", resp.Summary)
+	}
+	if resp.FilterOptions == nil {
+		t.Fatal("filter options are nil")
+	}
+	if len(resp.FilterOptions.AccountStats) != 2 {
+		t.Fatalf("account filter options should ignore active account/model filters: %#v", resp.FilterOptions.AccountStats)
+	}
+	if len(resp.FilterOptions.APIKeyStats) != 2 {
+		t.Fatalf("api key filter options should ignore active account/model filters: %#v", resp.FilterOptions.APIKeyStats)
+	}
+	if len(resp.FilterOptions.ModelStats) != 2 {
+		t.Fatalf("model filter options should ignore active account/model filters: %#v", resp.FilterOptions.ModelStats)
+	}
+	if len(resp.FilterOptions.ChannelShare) != 2 {
+		t.Fatalf("channel/provider filter options should ignore active account/model filters: %#v", resp.FilterOptions.ChannelShare)
+	}
+}
+
 func newMonitoringTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
@@ -332,6 +649,7 @@ func monitoringEvent(
 		Source:          "user@example.com",
 		SourceHash:      sourceHash,
 		APIKeyHash:      "api-key-" + authIndex,
+		AccountSnapshot: "user@example.com",
 		InputTokens:     inputTokens,
 		OutputTokens:    outputTokens,
 		ReasoningTokens: reasoningTokens,

@@ -10,6 +10,7 @@ import {
   DEFAULT_CODEX_INSPECTION_SETTINGS,
   executeCodexInspectionActions,
   isCodexInspectionStoppedError,
+  isExecutableAction,
   isSuggestedAction,
   loadCodexInspectionLastRun,
   resolveCodexInspectionAutoActionItems,
@@ -24,20 +25,25 @@ import {
   type CodexInspectionRunResult,
   type CodexInspectionSession,
 } from '@/features/monitoring/codexInspection';
+import { Button } from '@/components/ui/Button';
 import { CodexInspectionLogsPanel } from '@/features/monitoring/components/CodexInspectionLogsPanel';
 import { CodexInspectionModeTabs } from '@/features/monitoring/components/CodexInspectionModeTabs';
 import { CodexInspectionResultsPanel } from '@/features/monitoring/components/CodexInspectionResultsPanel';
-import { CodexInspectionSettingsModal } from '@/features/monitoring/components/CodexInspectionSettingsModal';
 import { CodexInspectionStatusPanel } from '@/features/monitoring/components/CodexInspectionStatusPanel';
+import { InspectionConfigDrawer } from '@/features/monitoring/components/InspectionConfigDrawer';
+import { InspectionConfigFields } from '@/features/monitoring/components/InspectionConfigFields';
 import {
   countActions,
   createCompletedProgressSnapshot,
   createIdleProgressSnapshot,
+  buildConfigOverviewItems,
   filterByAction,
   formatActionLabel,
   formatAutoActionModeLabel,
   formatTime,
   toSettingsDraft,
+  validateInspectionConfigDraft,
+  validateInspectionConfigFields,
   type ActionFilter,
   type ExecutionTriggerSource,
   type InspectionLogEntry,
@@ -79,6 +85,7 @@ export function CodexInspectionPage() {
     toSettingsDraft(loadCodexInspectionConfigurableSettings(config))
   );
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [configFocusField, setConfigFocusField] = useState<string | null>(null);
   const [logs, setLogs] = useState<InspectionLogEntry[]>(() => initialLastRun?.logs ?? []);
   const [logsCollapsed, setLogsCollapsed] = useState(() => initialLastRun?.logsCollapsed ?? true);
   const [runStatus, setRunStatus] = useState<RunStatus>(() =>
@@ -215,10 +222,10 @@ export function CodexInspectionPage() {
       void promise
         .then((nextResult) => {
           if (activeSessionIdRef.current !== sessionId) return;
-          const nextActionableResults = nextResult.results.filter(isSuggestedAction);
+          const nextSuggestedResults = nextResult.results.filter(isSuggestedAction);
           const autoTargets = resolveCodexInspectionAutoActionItems(
             autoActionMode,
-            nextActionableResults
+            nextSuggestedResults
           );
           setResult(nextResult);
           setResultConnectionFingerprint(runConnectionFingerprint);
@@ -241,10 +248,10 @@ export function CodexInspectionPage() {
               return;
             }
 
-            if (nextActionableResults.length > 0) {
+            if (nextSuggestedResults.length > 0) {
               const skippedMessage = t('monitoring.codex_inspection_auto_execute_skipped_by_mode', {
                 mode: formatAutoActionModeLabel(autoActionMode, t),
-                count: nextActionableResults.length,
+                count: nextSuggestedResults.length,
               });
               appendLog('warning', skippedMessage);
               showNotification(skippedMessage, 'info');
@@ -253,7 +260,7 @@ export function CodexInspectionPage() {
           }
 
           const noActionsMessage =
-            nextActionableResults.length === 0
+            nextSuggestedResults.length === 0
               ? t('monitoring.codex_inspection_auto_execute_no_actions')
               : t('monitoring.codex_inspection_run_success');
           appendLog('success', noActionsMessage);
@@ -407,7 +414,7 @@ export function CodexInspectionPage() {
         showNotification(t('notification.connection_required'), 'warning');
         return;
       }
-      const targets = items.filter(isSuggestedAction);
+      const targets = items.filter(isExecutableAction);
       if (targets.length === 0) {
         showNotification(t('monitoring.codex_inspection_no_pending_actions'), 'info');
         return;
@@ -471,20 +478,25 @@ export function CodexInspectionPage() {
     executeItemsRef.current = executeItems;
   }, [executeItems]);
 
-  const actionableResults = useMemo(
+  const suggestedResults = useMemo(
     () => (result ? result.results.filter(isSuggestedAction) : []),
     [result]
   );
 
+  const executableResults = useMemo(
+    () => (result ? result.results.filter(isExecutableAction) : []),
+    [result]
+  );
+
   const filteredResults = useMemo(
-    () => filterByAction(actionableResults, actionFilter),
-    [actionableResults, actionFilter]
+    () => filterByAction(suggestedResults, actionFilter),
+    [suggestedResults, actionFilter]
   );
 
   const handleExecutePlanned = useCallback(() => {
     if (!result) return;
 
-    const targets = actionableResults;
+    const targets = executableResults;
     const counts = countActions(targets);
     showConfirmation({
       title: t('monitoring.codex_inspection_execute_confirm_title'),
@@ -499,7 +511,7 @@ export function CodexInspectionPage() {
       variant: 'danger',
       onConfirm: () => executeItems(targets),
     });
-  }, [actionableResults, executeItems, result, showConfirmation, t]);
+  }, [executableResults, executeItems, result, showConfirmation, t]);
 
   const handleExecuteSingle = useCallback(
     (item: CodexInspectionResultItem) => {
@@ -535,14 +547,21 @@ export function CodexInspectionPage() {
     const deleteCount = summarySource ? summarySource.deleteCount : null;
     const disableCount = summarySource ? summarySource.disableCount : null;
     const enableCount = summarySource ? summarySource.enableCount : null;
-    const totalActions =
+    const reauthCount = summarySource ? summarySource.reauthCount : null;
+    const keepCount = summarySource ? summarySource.keepCount : null;
+    const actionCounts =
       summarySource !== null
-        ? summarySource.deleteCount + summarySource.disableCount + summarySource.enableCount
+        ? summarySource.deleteCount +
+          summarySource.disableCount +
+          summarySource.enableCount +
+          summarySource.reauthCount
         : null;
 
     const probeMeta = summarySource
-      ? `${t('monitoring.codex_inspection_target_type')} ${inspectionSettings.targetType}`
-      : t('monitoring.codex_inspection_progress_idle');
+      ? t('monitoring.server_codex_inspection_total_files', {
+          count: summarySource.totalFiles,
+        })
+      : t('monitoring.server_codex_inspection_total_files', { count: 0 });
 
     const sampledMeta = (() => {
       if (sampledTotal === null) {
@@ -559,60 +578,66 @@ export function CodexInspectionPage() {
 
     return [
       {
-        key: 'total-actions',
-        label: t('monitoring.codex_inspection_action_total'),
-        value: totalActions === null ? blank : String(totalActions),
-        meta:
-          totalActions !== null && totalActions > 0
-            ? t('monitoring.codex_inspection_pending_actions') + ` ${totalActions}`
-            : t('monitoring.codex_inspection_no_pending_actions'),
-        tone: totalActions && totalActions > 0 ? 'warn' : 'good',
-      },
-      {
         key: 'probe-total',
         label: t('monitoring.codex_inspection_total_accounts'),
         value: probeSetCount === null ? blank : String(probeSetCount),
         meta: probeMeta,
+        icon: 'probe',
+        accent: 'blue',
       },
       {
         key: 'sampled',
         label: t('monitoring.codex_inspection_sampled_accounts'),
         value: sampledCompleted === null ? blank : String(sampledCompleted),
         meta: sampledMeta,
+        icon: 'sampled',
+        accent: 'cyan',
       },
       {
         key: 'delete',
         label: t('monitoring.codex_inspection_delete_count'),
         value: deleteCount === null ? blank : String(deleteCount),
         meta:
-          deleteCount && deleteCount > 0
-            ? t('monitoring.codex_inspection_action_delete')
-            : dash,
+          actionCounts === null
+            ? dash
+            : t('monitoring.server_codex_inspection_action_total_value', { count: actionCounts }),
         tone: deleteCount && deleteCount > 0 ? 'bad' : undefined,
+        icon: 'delete',
+        accent: 'red',
       },
       {
         key: 'disable',
         label: t('monitoring.codex_inspection_disable_count'),
         value: disableCount === null ? blank : String(disableCount),
-        meta:
-          disableCount && disableCount > 0
-            ? t('monitoring.codex_inspection_action_disable')
-            : dash,
+        meta: `${t('monitoring.codex_inspection_threshold')}: ${inspectionSettings.usedPercentThreshold}%`,
         tone: disableCount && disableCount > 0 ? 'warn' : undefined,
+        icon: 'disable',
+        accent: 'amber',
       },
       {
         key: 'enable',
         label: t('monitoring.codex_inspection_enable_count'),
         value: enableCount === null ? blank : String(enableCount),
         meta:
-          enableCount && enableCount > 0
-            ? t('monitoring.codex_inspection_action_enable')
-            : dash,
+          keepCount === null
+            ? dash
+            : t('monitoring.server_codex_inspection_keep_count', { count: keepCount }),
         tone: enableCount && enableCount > 0 ? 'good' : undefined,
+        icon: 'enable',
+        accent: 'green',
+      },
+      {
+        key: 'reauth',
+        label: t('monitoring.codex_inspection_reauth_count'),
+        value: reauthCount === null ? blank : String(reauthCount),
+        meta: t('monitoring.codex_inspection_action_reauth'),
+        tone: reauthCount && reauthCount > 0 ? 'info' : undefined,
+        icon: 'reauth',
+        accent: 'violet',
       },
     ];
   }, [
-    inspectionSettings.targetType,
+    inspectionSettings.usedPercentThreshold,
     progress.completed,
     progress.percent,
     progress.summary,
@@ -621,7 +646,7 @@ export function CodexInspectionPage() {
     t,
   ]);
 
-  const pendingActionCount = actionableResults.length;
+  const pendingActionCount = executableResults.length;
   const progressLabel =
     progress.total > 0
       ? t('monitoring.codex_inspection_progress_status', {
@@ -657,8 +682,9 @@ export function CodexInspectionPage() {
     ? `${t('monitoring.codex_inspection_last_finished_at')} · ${formatTime(result.finishedAt, i18n.language)}`
     : null;
 
-  const openSettingsModal = useCallback(() => {
+  const openSettingsModal = useCallback((field?: string) => {
     setSettingsDraft(toSettingsDraft(inspectionSettings));
+    setConfigFocusField(field ?? null);
     setIsSettingsModalOpen(true);
   }, [inspectionSettings]);
 
@@ -679,75 +705,51 @@ export function CodexInspectionPage() {
     }));
   }, []);
 
-  const parseNonNegativeInteger = useCallback(
-    (value: string, label: string, min: number) => {
-      const parsed = Number(value.trim());
-      if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < min) {
-        throw new Error(t('monitoring.codex_inspection_settings_invalid_integer', { field: label, min }));
-      }
-      return parsed;
-    },
-    [t]
+  const settingsFieldErrors = useMemo(
+    () => validateInspectionConfigFields(settingsDraft, t),
+    [settingsDraft, t]
   );
 
+  const hasUnsavedSettings = useMemo(() => {
+    const baseline = toSettingsDraft(inspectionSettings);
+    return (Object.keys(baseline) as (keyof InspectionSettingsDraft)[]).some(
+      (key) => baseline[key] !== settingsDraft[key]
+    );
+  }, [inspectionSettings, settingsDraft]);
+
   const handleSaveSettings = useCallback(() => {
-    const targetType = settingsDraft.targetType.trim().toLowerCase();
-    if (!targetType) {
-      showNotification(t('monitoring.codex_inspection_settings_target_type_required'), 'error');
+    const validation = validateInspectionConfigDraft(settingsDraft, t);
+    if (!validation.ok) {
+      const firstError = Object.values(validation.errors).find(Boolean);
+      showNotification(firstError ?? t('common.unknown_error'), 'error');
       return;
     }
 
-    try {
-      const nextSettings = saveCodexInspectionConfigurableSettings({
-        targetType,
-        workers: parseNonNegativeInteger(
-          settingsDraft.workers,
-          t('monitoring.codex_inspection_settings_workers_label'),
-          1
-        ),
-        deleteWorkers: parseNonNegativeInteger(
-          settingsDraft.deleteWorkers,
-          t('monitoring.codex_inspection_settings_delete_workers_label'),
-          1
-        ),
-        timeout: parseNonNegativeInteger(
-          settingsDraft.timeout,
-          t('monitoring.codex_inspection_settings_timeout_label'),
-          1
-        ),
-        retries: parseNonNegativeInteger(
-          settingsDraft.retries,
-          t('monitoring.codex_inspection_settings_retries_label'),
-          0
-        ),
-        userAgent: settingsDraft.userAgent.trim(),
-        sampleSize: parseNonNegativeInteger(
-          settingsDraft.sampleSize,
-          t('monitoring.codex_inspection_settings_sample_size_label'),
-          0
-        ),
-        usedPercentThreshold: (() => {
-          const parsed = Number(settingsDraft.usedPercentThreshold.trim());
-          if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
-            throw new Error(
-              t('monitoring.codex_inspection_settings_invalid_threshold', {
-                field: t('monitoring.codex_inspection_settings_used_percent_threshold_label'),
-              })
-            );
-          }
-          return parsed;
-        })(),
-        autoActionMode: settingsDraft.autoActionMode,
-      });
+    const nextSettings = saveCodexInspectionConfigurableSettings(validation.values);
 
-      setInspectionSettings(nextSettings);
-      setSettingsDraft(toSettingsDraft(nextSettings));
-      setIsSettingsModalOpen(false);
-      showNotification(t('monitoring.codex_inspection_settings_saved'), 'success');
-    } catch (error) {
-      showNotification(error instanceof Error ? error.message : String(error || t('common.unknown_error')), 'error');
+    setInspectionSettings(nextSettings);
+    setSettingsDraft(toSettingsDraft(nextSettings));
+    setIsSettingsModalOpen(false);
+    showNotification(t('monitoring.codex_inspection_settings_saved'), 'success');
+  }, [settingsDraft, showNotification, t]);
+
+  const handleCloseSettingsDrawer = useCallback(() => {
+    if (hasUnsavedSettings) {
+      showConfirmation({
+        title: t('monitoring.server_codex_inspection_close_confirm_title'),
+        message: t('monitoring.server_codex_inspection_close_unsaved_hint'),
+        confirmText: t('monitoring.server_codex_inspection_discard'),
+        cancelText: t('common.cancel'),
+        variant: 'danger',
+        onConfirm: () => {
+          setSettingsDraft(toSettingsDraft(inspectionSettings));
+          setIsSettingsModalOpen(false);
+        },
+      });
+      return;
     }
-  }, [parseNonNegativeInteger, settingsDraft, showNotification, t]);
+    setIsSettingsModalOpen(false);
+  }, [hasUnsavedSettings, inspectionSettings, showConfirmation, t]);
 
   const handleResetSettings = useCallback(() => {
     clearCodexInspectionConfigurableSettings();
@@ -771,14 +773,16 @@ export function CodexInspectionPage() {
   }, [logsCollapsed, scrollLogsToBottom]);
 
   const filterCounts = useMemo(() => {
-    const counts = countActions(actionableResults);
+    const counts = countActions(suggestedResults);
     return {
-      all: actionableResults.length,
+      all: suggestedResults.length,
       delete: counts.delete,
       disable: counts.disable,
       enable: counts.enable,
+      reauth: counts.reauth,
+      http_401: counts.http401,
     };
-  }, [actionableResults]);
+  }, [suggestedResults]);
 
   const filterLabel = (filter: ActionFilter) => {
     switch (filter) {
@@ -788,6 +792,10 @@ export function CodexInspectionPage() {
         return t('monitoring.codex_inspection_filter_disable');
       case 'enable':
         return t('monitoring.codex_inspection_filter_enable');
+      case 'reauth':
+        return t('monitoring.codex_inspection_filter_reauth');
+      case 'http_401':
+        return t('monitoring.codex_inspection_filter_401');
       case 'all':
       default:
         return t('monitoring.codex_inspection_filter_all');
@@ -801,8 +809,10 @@ export function CodexInspectionPage() {
       : runStatus === 'running'
         ? t('monitoring.codex_inspection_running')
         : t('monitoring.codex_inspection_run_local');
-  const autoActionModeLabel = formatAutoActionModeLabel(inspectionSettings.autoActionMode, t);
-  const executionModeLabel = t('monitoring.codex_inspection_mode_local');
+  const configOverviewItems = buildConfigOverviewItems(inspectionSettings, {
+    mode: 'local',
+    t,
+  });
 
   return (
     <div className={styles.page}>
@@ -841,11 +851,8 @@ export function CodexInspectionPage() {
       </div>
 
       <CodexInspectionStatusPanel
-        inspectionSettings={inspectionSettings}
         statusTone={statusTone}
         statusLabel={statusLabel}
-        executionModeLabel={executionModeLabel}
-        autoActionModeLabel={autoActionModeLabel}
         lastFinishedLabel={lastFinishedLabel}
         pendingActionCount={pendingActionCount}
         summaryCards={summaryCards}
@@ -857,8 +864,11 @@ export function CodexInspectionPage() {
         executing={executing}
         isInspectionInFlight={isInspectionInFlight}
         runDisabled={runStatus === 'running' || executing || connectionStatus !== 'connected'}
+        configOverviewItems={configOverviewItems}
+        configOverviewTitle={t('monitoring.codex_inspection_config_overview_title')}
+        configOverviewEditLabel={t('monitoring.codex_inspection_config_overview_edit')}
         t={t}
-        onOpenSettings={openSettingsModal}
+        onEditConfig={openSettingsModal}
         onRunInspection={handleRunInspection}
         onPauseInspection={handlePauseInspection}
         onStopInspection={handleStopInspection}
@@ -867,7 +877,7 @@ export function CodexInspectionPage() {
       <CodexInspectionResultsPanel
         result={result}
         filteredResults={filteredResults}
-        actionableResults={actionableResults}
+        suggestedResults={suggestedResults}
         pendingActionCount={pendingActionCount}
         filterCounts={filterCounts}
         actionFilter={actionFilter}
@@ -891,16 +901,48 @@ export function CodexInspectionPage() {
         onToggleCollapsed={() => setLogsCollapsed((previous) => !previous)}
       />
 
-      <CodexInspectionSettingsModal
+      <InspectionConfigDrawer
         open={isSettingsModalOpen}
-        onClose={() => setIsSettingsModalOpen(false)}
-        settingsDraft={settingsDraft}
-        t={t}
-        onDraftChange={handleSettingsDraftChange}
-        onAutoActionModeChange={handleAutoActionModeChange}
-        onReset={handleResetSettings}
-        onSave={handleSaveSettings}
-      />
+        title={t('monitoring.codex_inspection_settings_title')}
+        description={t('monitoring.codex_inspection_settings_desc')}
+        closeLabel={t('common.close')}
+        focusField={configFocusField}
+        onClose={handleCloseSettingsDrawer}
+        footer={
+          <>
+            <div className={styles.configDrawerStatus}>
+              {hasUnsavedSettings ? (
+                <span className={styles.serverUnsavedBadge}>
+                  {t('monitoring.server_codex_inspection_unsaved')}
+                </span>
+              ) : (
+                <span>{t('monitoring.server_codex_inspection_saved_applied')}</span>
+              )}
+            </div>
+            <div className={styles.configDrawerActions}>
+              <Button
+                variant="secondary"
+                size="sm"
+                className={styles.settingsResetButton}
+                onClick={handleResetSettings}
+              >
+                {t('monitoring.codex_inspection_settings_reset_button')}
+              </Button>
+              <Button size="sm" onClick={handleSaveSettings}>
+                {t('common.save')}
+              </Button>
+            </div>
+          </>
+        }
+      >
+        <InspectionConfigFields
+          draft={settingsDraft}
+          errors={settingsFieldErrors}
+          t={t}
+          onFieldChange={handleSettingsDraftChange}
+          onAutoActionModeChange={handleAutoActionModeChange}
+        />
+      </InspectionConfigDrawer>
     </div>
   );
 }

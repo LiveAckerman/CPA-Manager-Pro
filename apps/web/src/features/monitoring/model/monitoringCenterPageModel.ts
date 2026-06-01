@@ -6,9 +6,11 @@ import type {
   CodexQuotaWindow,
   GeminiCliQuotaBucketState,
   KimiQuotaRow,
+  XaiBillingSummary,
 } from '@/types';
 import type {
   MonitoringAccountRow,
+  MonitoringApiKeyRow,
   MonitoringEventRow,
   MonitoringSummary,
 } from '@/features/monitoring/hooks/useMonitoringData';
@@ -34,6 +36,7 @@ import {
   fetchGeminiCliCodeAssist,
   fetchGeminiCliQuotaBuckets,
   fetchKimiQuota,
+  fetchXaiQuota,
   formatKimiResetHint,
   formatQuotaResetTime,
 } from '@/utils/quota';
@@ -129,11 +132,17 @@ export const buildProviderOptions = (
   rows: MonitoringEventRow[],
   selectedProvider: string,
   t: TFunction
+) => buildProviderOptionsFromValues(rows.map((row) => row.provider), selectedProvider, t);
+
+export const buildProviderOptionsFromValues = (
+  providers: string[],
+  selectedProvider: string,
+  t: TFunction
 ) =>
   ensureSelectedOption(
     [
       { value: 'all', label: t('monitoring.filter_all_providers') },
-      ...buildSortedValueOptions(rows.map((row) => row.provider)),
+      ...buildSortedValueOptions(providers),
     ],
     selectedProvider
   );
@@ -147,7 +156,9 @@ export const buildAccountOptions = (
     [
       { value: 'all', label: t('monitoring.filter_all_accounts') },
       ...Array.from(
-        new Map(rows.map((row) => [row.account, buildAccountOptionLabel(row)])).entries()
+        new Map(
+          rows.map((row) => [row.filterValue || row.account, buildAccountOptionLabel(row)])
+        ).entries()
       )
         .sort((left, right) => left[1].localeCompare(right[1]))
         .map(([value, label]) => ({ value, label })),
@@ -159,11 +170,17 @@ export const buildModelOptions = (
   rows: MonitoringEventRow[],
   selectedModel: string,
   t: TFunction
+) => buildModelOptionsFromValues(rows.map((row) => row.model), selectedModel, t);
+
+export const buildModelOptionsFromValues = (
+  models: string[],
+  selectedModel: string,
+  t: TFunction
 ) =>
   ensureSelectedOption(
     [
       { value: 'all', label: t('monitoring.filter_all_models') },
-      ...buildSortedValueOptions(rows.map((row) => row.model)),
+      ...buildSortedValueOptions(models),
     ],
     selectedModel
   );
@@ -172,13 +189,35 @@ export const buildChannelOptions = (
   rows: MonitoringEventRow[],
   selectedChannel: string,
   t: TFunction
+) => buildChannelOptionsFromValues(rows.map((row) => row.channel), selectedChannel, t);
+
+export const buildChannelOptionsFromValues = (
+  channels: string[],
+  selectedChannel: string,
+  t: TFunction
 ) =>
   ensureSelectedOption(
     [
       { value: 'all', label: t('monitoring.filter_all_channels') },
-      ...buildSortedValueOptions(rows.map((row) => row.channel)),
+      ...buildSortedValueOptions(channels),
     ],
     selectedChannel
+  );
+
+const buildApiKeyOptionsFromMap = (
+  optionMap: Map<string, string>,
+  selectedApiKeyHash: string,
+  t: TFunction
+) =>
+  ensureSelectedOption(
+    [
+      { value: 'all', label: t('monitoring.filter_all_api_keys') },
+      ...Array.from(optionMap.entries())
+        .sort((left, right) => left[1].localeCompare(right[1]))
+        .map(([value, label]) => ({ value, label })),
+    ],
+    selectedApiKeyHash,
+    selectedApiKeyHash
   );
 
 export const buildApiKeyOptions = (
@@ -192,16 +231,21 @@ export const buildApiKeyOptions = (
     optionMap.set(row.apiKeyHash, row.apiKeyLabel || row.apiKeyMasked || row.apiKeyHash);
   });
 
-  return ensureSelectedOption(
-    [
-      { value: 'all', label: t('monitoring.filter_all_api_keys') },
-      ...Array.from(optionMap.entries())
-        .sort((left, right) => left[1].localeCompare(right[1]))
-        .map(([value, label]) => ({ value, label })),
-    ],
-    selectedApiKeyHash,
-    selectedApiKeyHash
-  );
+  return buildApiKeyOptionsFromMap(optionMap, selectedApiKeyHash, t);
+};
+
+export const buildApiKeyOptionsFromRows = (
+  rows: MonitoringApiKeyRow[],
+  selectedApiKeyHash: string,
+  t: TFunction
+) => {
+  const optionMap = new Map<string, string>();
+  rows.forEach((row) => {
+    if (!row.apiKeyHash || optionMap.has(row.apiKeyHash)) return;
+    optionMap.set(row.apiKeyHash, row.apiKeyLabel || row.apiKeyMasked || row.apiKeyHash);
+  });
+
+  return buildApiKeyOptionsFromMap(optionMap, selectedApiKeyHash, t);
 };
 
 export const buildStatusOptions = (t: TFunction): MonitoringOption[] => [
@@ -372,7 +416,11 @@ export const buildSecondarySummaryCards = (
   {
     label: t('monitoring.cached_tokens'),
     value: formatCompactNumber(summary.cachedTokens),
-    meta: `${t('monitoring.of_input_tokens')} ${formatPercent(summary.inputTokens > 0 ? summary.cachedTokens / summary.inputTokens : 0)}`,
+    meta: [
+      `${t('monitoring.of_input_tokens')} ${formatPercent(summary.inputTokens > 0 ? summary.cachedTokens / summary.inputTokens : 0)}`,
+      `${t('monitoring.cache_creation_tokens_short')} ${formatCompactNumber(summary.cacheCreationTokens)}`,
+      `${t('monitoring.cache_read_tokens_short')} ${formatCompactNumber(summary.cacheReadTokens)}`,
+    ].join(' · '),
     variant: 'secondary',
     icon: 'cache',
     accent: 'teal',
@@ -545,6 +593,27 @@ const buildKimiAccountQuotaWindows = (rows: KimiQuotaRow[], t: TFunction): Accou
     };
   });
 
+const formatXaiCurrency = (value: number | null): string => {
+  if (value === null) return '--';
+  return `$${(value / 100).toFixed(2)}`;
+};
+
+const buildXaiAccountQuotaWindows = (
+  billing: XaiBillingSummary,
+  t: TFunction
+): AccountQuotaWindow[] => [
+  {
+    id: 'monthly-limit',
+    label: t('xai_quota.monthly_limit'),
+    remainingPercent: buildRemainingFromUsedPercent(billing.usedPercent),
+    resetLabel: billing.billingPeriodEnd ? formatQuotaResetTime(billing.billingPeriodEnd) : '-',
+    usageLabel: t('xai_quota.usage_amount', {
+      used: formatXaiCurrency(billing.usedCents),
+      limit: formatXaiCurrency(billing.monthlyLimitCents),
+    }),
+  },
+];
+
 export const getAccountQuotaProviderLabel = (
   provider: MonitoringAccountQuotaProvider,
   t: TFunction
@@ -558,6 +627,8 @@ export const getAccountQuotaProviderLabel = (
       return t('gemini_cli_quota.title');
     case 'kimi':
       return t('kimi_quota.title');
+    case 'xai':
+      return t('xai_quota.title');
     case 'codex':
     default:
       return t('codex_quota.title');
@@ -574,6 +645,8 @@ const getAccountQuotaEmptyMessage = (provider: MonitoringAccountQuotaProvider, t
       return t('gemini_cli_quota.empty_buckets');
     case 'kimi':
       return t('kimi_quota.empty_data');
+    case 'xai':
+      return t('xai_quota.empty_data');
     case 'codex':
     default:
       return t('codex_quota.empty_windows');
@@ -660,6 +733,17 @@ export const requestAccountQuota = async (
       return {
         ...buildBaseAccountQuotaEntry(target, t),
         windows: buildKimiAccountQuotaWindows(rows, t),
+      };
+    }
+    case 'xai': {
+      const billing = await fetchXaiQuota(target.file, t);
+      const metaLabels =
+        billing.onDemandCapCents !== null
+          ? [`${t('xai_quota.on_demand_cap')}: ${formatXaiCurrency(billing.onDemandCapCents)}`]
+          : [];
+      return {
+        ...buildBaseAccountQuotaEntry(target, t, metaLabels),
+        windows: buildXaiAccountQuotaWindows(billing, t),
       };
     }
     case 'codex':

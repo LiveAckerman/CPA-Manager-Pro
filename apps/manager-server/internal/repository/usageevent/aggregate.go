@@ -7,40 +7,51 @@ import (
 
 // Aggregate captures roll-up metrics for a usage_events window.
 type Aggregate struct {
-	TotalCalls      int64
-	SuccessCalls    int64
-	FailureCalls    int64
-	InputTokens     int64
-	OutputTokens    int64
-	ReasoningTokens int64
-	CachedTokens    int64
-	TotalTokens     int64
-	AvgLatencyMS    sql.NullFloat64
-	ZeroTokenCalls  int64
+	TotalCalls          int64
+	SuccessCalls        int64
+	FailureCalls        int64
+	InputTokens         int64
+	OutputTokens        int64
+	ReasoningTokens     int64
+	CachedTokens        int64
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	TotalTokens         int64
+	AvgLatencyMS        sql.NullFloat64
+	ZeroTokenCalls      int64
 }
 
 // ModelStat aggregates per-model totals.
 type ModelStat struct {
-	Model           string
-	BillingModel    string
-	Calls           int64
-	SuccessCalls    int64
-	InputTokens     int64
-	OutputTokens    int64
-	ReasoningTokens int64
-	CachedTokens    int64
-	TotalTokens     int64
+	Model               string
+	BillingModel        string
+	Calls               int64
+	SuccessCalls        int64
+	InputTokens         int64
+	OutputTokens        int64
+	ReasoningTokens     int64
+	CachedTokens        int64
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	TotalTokens         int64
 }
 
 // RecentFailure holds the columns required to display a recent failure entry.
 type RecentFailure struct {
-	TimestampMS int64
-	Model       string
-	APIKeyHash  string
-	SourceHash  string
-	AuthIndex   string
-	Endpoint    string
-	LatencyMS   sql.NullInt64
+	TimestampMS           int64
+	Model                 string
+	APIKeyHash            string
+	Source                string
+	SourceHash            string
+	AuthIndex             string
+	Endpoint              string
+	LatencyMS             sql.NullInt64
+	AccountSnapshot       string
+	AuthLabelSnapshot     string
+	AuthProviderSnapshot  string
+	AuthProjectIDSnapshot string
+	FailStatusCode        sql.NullInt64
+	FailSummary           string
 }
 
 const aggregateSQL = `select
@@ -50,7 +61,9 @@ const aggregateSQL = `select
 	coalesce(sum(input_tokens), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(reasoning_tokens), 0),
-	coalesce(sum(case when cached_tokens > cache_tokens then cached_tokens else cache_tokens end), 0),
+	coalesce(sum(max(max(cached_tokens, cache_tokens) - max(cache_read_tokens, 0) - max(cache_creation_tokens, 0), 0)), 0),
+	coalesce(sum(cache_read_tokens), 0),
+	coalesce(sum(cache_creation_tokens), 0),
 	coalesce(sum(total_tokens), 0),
 	avg(nullif(latency_ms, 0)),
 	coalesce(sum(case when total_tokens = 0 and failed = 0 then 1 else 0 end), 0)
@@ -70,6 +83,8 @@ func (r *repository) AggregateBetween(ctx context.Context, fromMs, toMs int64) (
 		&agg.OutputTokens,
 		&agg.ReasoningTokens,
 		&agg.CachedTokens,
+		&agg.CacheReadTokens,
+		&agg.CacheCreationTokens,
 		&agg.TotalTokens,
 		&agg.AvgLatencyMS,
 		&agg.ZeroTokenCalls,
@@ -99,7 +114,9 @@ select
 	coalesce(sum(e.input_tokens), 0),
 	coalesce(sum(e.output_tokens), 0),
 	coalesce(sum(e.reasoning_tokens), 0),
-	coalesce(sum(case when e.cached_tokens > e.cache_tokens then e.cached_tokens else e.cache_tokens end), 0),
+	coalesce(sum(max(max(e.cached_tokens, e.cache_tokens) - max(e.cache_read_tokens, 0) - max(e.cache_creation_tokens, 0), 0)), 0),
+	coalesce(sum(e.cache_read_tokens), 0),
+	coalesce(sum(e.cache_creation_tokens), 0),
 	coalesce(sum(e.total_tokens), 0)
 from usage_events e
 join top_models t on t.model = e.model
@@ -130,6 +147,8 @@ func (r *repository) TopModelsBetween(ctx context.Context, fromMs, toMs int64, l
 			&stat.OutputTokens,
 			&stat.ReasoningTokens,
 			&stat.CachedTokens,
+			&stat.CacheReadTokens,
+			&stat.CacheCreationTokens,
 			&stat.TotalTokens,
 		); err != nil {
 			return nil, err
@@ -147,7 +166,9 @@ const modelStatsSQL = `select
 	coalesce(sum(input_tokens), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(reasoning_tokens), 0),
-	coalesce(sum(case when cached_tokens > cache_tokens then cached_tokens else cache_tokens end), 0),
+	coalesce(sum(max(max(cached_tokens, cache_tokens) - max(cache_read_tokens, 0) - max(cache_creation_tokens, 0), 0)), 0),
+	coalesce(sum(cache_read_tokens), 0),
+	coalesce(sum(cache_creation_tokens), 0),
 	coalesce(sum(total_tokens), 0)
 from usage_events
 where timestamp_ms >= ? and timestamp_ms < ?
@@ -174,6 +195,8 @@ func (r *repository) ModelStatsBetween(ctx context.Context, fromMs, toMs int64) 
 			&stat.OutputTokens,
 			&stat.ReasoningTokens,
 			&stat.CachedTokens,
+			&stat.CacheReadTokens,
+			&stat.CacheCreationTokens,
 			&stat.TotalTokens,
 		); err != nil {
 			return nil, err
@@ -186,13 +209,20 @@ func (r *repository) ModelStatsBetween(ctx context.Context, fromMs, toMs int64) 
 const recentFailuresSQL = `select
 	timestamp_ms, model,
 	coalesce(api_key_hash, ''),
+	coalesce(source, ''),
 	coalesce(source_hash, ''),
 	coalesce(auth_index, ''),
 	coalesce(endpoint, ''),
-	latency_ms
+	latency_ms,
+	coalesce(account_snapshot, ''),
+	coalesce(auth_label_snapshot, ''),
+	coalesce(auth_provider_snapshot, ''),
+	coalesce(auth_project_id_snapshot, ''),
+	fail_status_code,
+	coalesce(fail_summary, '')
 from usage_events
 where failed = 1 and timestamp_ms >= ? and timestamp_ms < ?
-order by timestamp_ms desc
+order by timestamp_ms desc, id desc
 limit ?`
 
 // RecentFailuresBetween returns the most recent failed events.
@@ -213,10 +243,17 @@ func (r *repository) RecentFailuresBetween(ctx context.Context, fromMs, toMs int
 			&rf.TimestampMS,
 			&rf.Model,
 			&rf.APIKeyHash,
+			&rf.Source,
 			&rf.SourceHash,
 			&rf.AuthIndex,
 			&rf.Endpoint,
 			&rf.LatencyMS,
+			&rf.AccountSnapshot,
+			&rf.AuthLabelSnapshot,
+			&rf.AuthProviderSnapshot,
+			&rf.AuthProjectIDSnapshot,
+			&rf.FailStatusCode,
+			&rf.FailSummary,
 		); err != nil {
 			return nil, err
 		}

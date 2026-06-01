@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ManagerConfig } from '@/services/api/usageService';
 import {
   getUsageServiceBootstrapToSync,
+  resolveManagerCPAConnection,
   resolveManagerBindingStatus,
   resolveManagerRequestAuthKey,
   resolveManagerSaveState,
@@ -90,6 +91,76 @@ describe('resolveManagerRequestAuthKey', () => {
         managerAdminKey: '   ',
       })
     ).toBe('');
+  });
+});
+
+describe('resolveManagerCPAConnection', () => {
+  it('keeps the saved embedded CPA URL and replaces only the submitted key', () => {
+    expect(
+      resolveManagerCPAConnection({
+        panelHostedByUsageService: true,
+        managerConfig: buildManagerConfig({
+          cpaConnection: {
+            cpaBaseUrl: 'http://saved-cpa.local:8317',
+            managementKey: 'old-cpa-key',
+          },
+        }),
+        currentCPAApiBase: 'http://manager.local:18317',
+        submittedCPAManagementKey: ' new-cpa-key ',
+        externalManagementKey: 'manager-admin-key',
+      })
+    ).toEqual({
+      cpaBaseUrl: 'http://saved-cpa.local:8317',
+      managementKey: 'new-cpa-key',
+    });
+  });
+
+  it('keeps the saved embedded CPA key when no replacement key is submitted', () => {
+    expect(
+      resolveManagerCPAConnection({
+        panelHostedByUsageService: true,
+        managerConfig: buildManagerConfig({
+          cpaConnection: {
+            cpaBaseUrl: 'http://saved-cpa.local:8317',
+            managementKey: 'old-cpa-key',
+          },
+        }),
+        currentCPAApiBase: 'http://manager.local:18317',
+        submittedCPAManagementKey: '   ',
+        externalManagementKey: 'manager-admin-key',
+      })
+    ).toEqual({
+      cpaBaseUrl: 'http://saved-cpa.local:8317',
+      managementKey: 'old-cpa-key',
+    });
+  });
+
+  it('uses the current CPA panel key for external panels unless an override is submitted', () => {
+    expect(
+      resolveManagerCPAConnection({
+        panelHostedByUsageService: false,
+        managerConfig: buildManagerConfig(),
+        currentCPAApiBase: 'http://cpa.local:8317/',
+        submittedCPAManagementKey: '',
+        externalManagementKey: ' current-cpa-key ',
+      })
+    ).toEqual({
+      cpaBaseUrl: 'http://cpa.local:8317/',
+      managementKey: 'current-cpa-key',
+    });
+
+    expect(
+      resolveManagerCPAConnection({
+        panelHostedByUsageService: false,
+        managerConfig: buildManagerConfig(),
+        currentCPAApiBase: 'http://cpa.local:8317/',
+        submittedCPAManagementKey: ' new-cpa-key ',
+        externalManagementKey: 'current-cpa-key',
+      })
+    ).toEqual({
+      cpaBaseUrl: 'http://cpa.local:8317/',
+      managementKey: 'new-cpa-key',
+    });
   });
 });
 

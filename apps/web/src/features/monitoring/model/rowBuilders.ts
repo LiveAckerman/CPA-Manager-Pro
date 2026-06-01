@@ -1,5 +1,9 @@
 import { formatApiKeyHashLabel } from './base';
 import { sanitizeApiKeyDisplayText, shouldPreferApiKeyAlias } from './apiKeys';
+import {
+  buildMonitoringAccountFilterValue,
+  parseMonitoringAccountFilterValue,
+} from './analyticsAdapters';
 import { getRangeBounds } from './range';
 import type {
   MonitoringAccountRow,
@@ -7,6 +11,7 @@ import type {
   MonitoringCustomTimeRange,
   MonitoringEventRow,
   MonitoringRealtimeRow,
+  MonitoringScopeFilters,
   MonitoringSummary,
   MonitoringTimeRange,
 } from './types';
@@ -67,6 +72,85 @@ export const buildRangeFilteredRows = (
   });
 };
 
+const isActiveScopeFilterValue = (value: string | null | undefined) =>
+  Boolean(value && value.trim() && value !== 'all');
+
+const normalizeScopeValue = (value: string | null | undefined) =>
+  String(value || '')
+    .trim()
+    .toLowerCase();
+
+export const buildScopeFilteredRows = (
+  rows: MonitoringEventRow[],
+  scopeFilters?: MonitoringScopeFilters
+) => {
+  if (!scopeFilters) return rows;
+
+  const accountCriteria = parseMonitoringAccountFilterValue(scopeFilters.account);
+  const account = normalizeScopeValue(accountCriteria.accounts[0] || scopeFilters.account);
+  const accountAuthIndices = new Set(accountCriteria.authIndices.map(normalizeScopeValue));
+  const accountApiKeyHashes = new Set(accountCriteria.apiKeyHashes.map(normalizeScopeValue));
+  const hasAccountSourceHashFilter = accountCriteria.sourceHashes.length > 0;
+  const provider = normalizeScopeValue(scopeFilters.provider);
+  const model = normalizeScopeValue(scopeFilters.model);
+  const channel = normalizeScopeValue(scopeFilters.channel);
+  const apiKeyHash = normalizeScopeValue(scopeFilters.apiKeyHash);
+  const status = scopeFilters.status;
+
+  return rows.filter((row) => {
+    if (isActiveScopeFilterValue(scopeFilters.account)) {
+      if (accountAuthIndices.size > 0) {
+        if (!accountAuthIndices.has(normalizeScopeValue(row.authIndex))) return false;
+      } else if (accountApiKeyHashes.size > 0) {
+        if (!accountApiKeyHashes.has(normalizeScopeValue(row.apiKeyHash))) return false;
+      } else if (hasAccountSourceHashFilter) {
+        // source_hash is only available in analytics payloads, so avoid dropping rows after
+        // the backend has already applied the exact source_hash filter.
+      } else {
+        const rowAccountValues = [
+          row.account,
+          row.accountMasked,
+          row.authLabel,
+          row.source,
+          row.sourceMasked,
+          row.authIndex,
+        ].map(normalizeScopeValue);
+        if (!rowAccountValues.includes(account)) return false;
+      }
+    }
+
+    if (
+      isActiveScopeFilterValue(scopeFilters.provider) &&
+      normalizeScopeValue(row.provider) !== provider
+    ) {
+      return false;
+    }
+
+    if (isActiveScopeFilterValue(scopeFilters.model) && normalizeScopeValue(row.model) !== model) {
+      return false;
+    }
+
+    if (
+      isActiveScopeFilterValue(scopeFilters.channel) &&
+      normalizeScopeValue(row.channel) !== channel
+    ) {
+      return false;
+    }
+
+    if (
+      isActiveScopeFilterValue(scopeFilters.apiKeyHash) &&
+      normalizeScopeValue(row.apiKeyHash) !== apiKeyHash
+    ) {
+      return false;
+    }
+
+    if (status === 'failed' && !row.failed) return false;
+    if (status === 'success' && row.failed) return false;
+
+    return true;
+  });
+};
+
 const buildRecentPattern = (rows: MonitoringEventRow[], limit = 10) =>
   rows
     .slice()
@@ -83,6 +167,8 @@ export const buildMonitoringSummary = (rows: MonitoringEventRow[]): MonitoringSu
   const outputTokens = rows.reduce((sum, row) => sum + row.outputTokens, 0);
   const reasoningTokens = rows.reduce((sum, row) => sum + row.reasoningTokens, 0);
   const cachedTokens = rows.reduce((sum, row) => sum + row.cachedTokens, 0);
+  const cacheReadTokens = rows.reduce((sum, row) => sum + (row.cacheReadTokens ?? 0), 0);
+  const cacheCreationTokens = rows.reduce((sum, row) => sum + (row.cacheCreationTokens ?? 0), 0);
   const totalTokens = rows.reduce((sum, row) => sum + row.totalTokens, 0);
   const totalCost = rows.reduce((sum, row) => sum + row.totalCost, 0);
 
@@ -122,6 +208,8 @@ export const buildMonitoringSummary = (rows: MonitoringEventRow[]): MonitoringSu
     outputTokens,
     reasoningTokens,
     cachedTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
     totalTokens,
     totalCost,
     averageLatencyMs: latencyCount > 0 ? latencySum / latencyCount : null,
@@ -147,6 +235,7 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
       accountMasked: string;
       authLabels: Set<string>;
       authIndices: Set<string>;
+      apiKeyHashes: Set<string>;
       channels: Set<string>;
       modelMap: Map<
         string,
@@ -158,6 +247,8 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
           inputTokens: number;
           outputTokens: number;
           cachedTokens: number;
+          cacheReadTokens: number;
+          cacheCreationTokens: number;
           totalTokens: number;
           totalCost: number;
           lastSeenAt: number;
@@ -170,6 +261,8 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
       inputTokens: number;
       outputTokens: number;
       cachedTokens: number;
+      cacheReadTokens: number;
+      cacheCreationTokens: number;
       totalTokens: number;
       totalCost: number;
       latencySum: number;
@@ -186,6 +279,7 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
       accountMasked: row.accountMasked,
       authLabels: new Set<string>(),
       authIndices: new Set<string>(),
+      apiKeyHashes: new Set<string>(),
       channels: new Set<string>(),
       modelMap: new Map(),
       rows: [] as MonitoringEventRow[],
@@ -195,6 +289,8 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
       inputTokens: 0,
       outputTokens: 0,
       cachedTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
       totalTokens: 0,
       totalCost: 0,
       latencySum: 0,
@@ -205,6 +301,7 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
     existing.rows.push(row);
     existing.authLabels.add(row.authLabel);
     existing.authIndices.add(row.authIndex);
+    existing.apiKeyHashes.add(row.apiKeyHash);
     existing.channels.add(row.channel);
     existing.totalCalls += 1;
     existing.successCalls += row.failed ? 0 : 1;
@@ -212,6 +309,8 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
     existing.inputTokens += row.inputTokens;
     existing.outputTokens += row.outputTokens;
     existing.cachedTokens += row.cachedTokens;
+    existing.cacheReadTokens += row.cacheReadTokens;
+    existing.cacheCreationTokens += row.cacheCreationTokens;
     existing.totalTokens += row.totalTokens;
     existing.totalCost += row.totalCost;
     existing.lastSeenAt = Math.max(existing.lastSeenAt, row.timestampMs);
@@ -229,6 +328,8 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
       inputTokens: 0,
       outputTokens: 0,
       cachedTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
       totalTokens: 0,
       totalCost: 0,
       lastSeenAt: 0,
@@ -240,6 +341,8 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
     modelEntry.inputTokens += row.inputTokens;
     modelEntry.outputTokens += row.outputTokens;
     modelEntry.cachedTokens += row.cachedTokens;
+    modelEntry.cacheReadTokens += row.cacheReadTokens;
+    modelEntry.cacheCreationTokens += row.cacheCreationTokens;
     modelEntry.totalTokens += row.totalTokens;
     modelEntry.totalCost += row.totalCost;
     modelEntry.lastSeenAt = Math.max(modelEntry.lastSeenAt, row.timestampMs);
@@ -251,13 +354,21 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
   return Array.from(grouped.values())
     .map((item) => {
       const channels = Array.from(item.channels).sort();
+      const authIndices = Array.from(item.authIndices).sort();
+      const apiKeyHashes = Array.from(item.apiKeyHashes).sort();
       return {
         id: item.id,
         account: item.account,
+        filterValue:
+          buildMonitoringAccountFilterValue({
+            account: item.account,
+            authIndices,
+            apiKeyHashes,
+          }) || item.account,
         displayAccount: resolveAccountDisplayName(item.account, channels),
         accountMasked: item.accountMasked,
         authLabels: Array.from(item.authLabels).sort(),
-        authIndices: Array.from(item.authIndices).sort(),
+        authIndices,
         channels,
         totalCalls: item.totalCalls,
         successCalls: item.successCalls,
@@ -266,6 +377,8 @@ export const buildAccountRows = (rows: MonitoringEventRow[]): MonitoringAccountR
         inputTokens: item.inputTokens,
         outputTokens: item.outputTokens,
         cachedTokens: item.cachedTokens,
+        cacheReadTokens: item.cacheReadTokens,
+        cacheCreationTokens: item.cacheCreationTokens,
         totalTokens: item.totalTokens,
         totalCost: item.totalCost,
         averageLatencyMs: item.latencyCount > 0 ? item.latencySum / item.latencyCount : null,
@@ -311,6 +424,8 @@ export const buildApiKeyRows = (rows: MonitoringEventRow[]): MonitoringApiKeyRow
           inputTokens: number;
           outputTokens: number;
           cachedTokens: number;
+          cacheReadTokens: number;
+          cacheCreationTokens: number;
           totalTokens: number;
           totalCost: number;
           lastSeenAt: number;
@@ -322,6 +437,8 @@ export const buildApiKeyRows = (rows: MonitoringEventRow[]): MonitoringApiKeyRow
       inputTokens: number;
       outputTokens: number;
       cachedTokens: number;
+      cacheReadTokens: number;
+      cacheCreationTokens: number;
       totalTokens: number;
       totalCost: number;
       latencySum: number;
@@ -333,8 +450,8 @@ export const buildApiKeyRows = (rows: MonitoringEventRow[]): MonitoringApiKeyRow
   rows.forEach((row) => {
     const hasKnownApiKey = Boolean(
       row.apiKeyHash ||
-        (row.apiKeyLabel && row.apiKeyLabel !== '-') ||
-        (row.apiKeyMasked && row.apiKeyMasked !== '-')
+      (row.apiKeyLabel && row.apiKeyLabel !== '-') ||
+      (row.apiKeyMasked && row.apiKeyMasked !== '-')
     );
     const apiKeyGroupKey = hasKnownApiKey
       ? row.apiKeyHash || row.apiKeyLabel || row.apiKeyMasked
@@ -355,6 +472,8 @@ export const buildApiKeyRows = (rows: MonitoringEventRow[]): MonitoringApiKeyRow
       inputTokens: 0,
       outputTokens: 0,
       cachedTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
       totalTokens: 0,
       totalCost: 0,
       latencySum: 0,
@@ -384,6 +503,8 @@ export const buildApiKeyRows = (rows: MonitoringEventRow[]): MonitoringApiKeyRow
     existing.inputTokens += row.inputTokens;
     existing.outputTokens += row.outputTokens;
     existing.cachedTokens += row.cachedTokens;
+    existing.cacheReadTokens += row.cacheReadTokens;
+    existing.cacheCreationTokens += row.cacheCreationTokens;
     existing.totalTokens += row.totalTokens;
     existing.totalCost += row.totalCost;
     existing.lastSeenAt = Math.max(existing.lastSeenAt, row.timestampMs);
@@ -401,6 +522,8 @@ export const buildApiKeyRows = (rows: MonitoringEventRow[]): MonitoringApiKeyRow
       inputTokens: 0,
       outputTokens: 0,
       cachedTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
       totalTokens: 0,
       totalCost: 0,
       lastSeenAt: 0,
@@ -412,6 +535,8 @@ export const buildApiKeyRows = (rows: MonitoringEventRow[]): MonitoringApiKeyRow
     modelEntry.inputTokens += row.inputTokens;
     modelEntry.outputTokens += row.outputTokens;
     modelEntry.cachedTokens += row.cachedTokens;
+    modelEntry.cacheReadTokens += row.cacheReadTokens;
+    modelEntry.cacheCreationTokens += row.cacheCreationTokens;
     modelEntry.totalTokens += row.totalTokens;
     modelEntry.totalCost += row.totalCost;
     modelEntry.lastSeenAt = Math.max(modelEntry.lastSeenAt, row.timestampMs);
@@ -437,6 +562,8 @@ export const buildApiKeyRows = (rows: MonitoringEventRow[]): MonitoringApiKeyRow
       inputTokens: item.inputTokens,
       outputTokens: item.outputTokens,
       cachedTokens: item.cachedTokens,
+      cacheReadTokens: item.cacheReadTokens,
+      cacheCreationTokens: item.cacheCreationTokens,
       totalTokens: item.totalTokens,
       totalCost: item.totalCost,
       averageLatencyMs: item.latencyCount > 0 ? item.latencySum / item.latencyCount : null,
@@ -478,6 +605,8 @@ export const buildRealtimeMonitorRows = (rows: MonitoringEventRow[]): Monitoring
       inputTokens: number;
       outputTokens: number;
       cachedTokens: number;
+      cacheReadTokens: number;
+      cacheCreationTokens: number;
       totalTokens: number;
       totalCost: number;
       latencySum: number;
@@ -515,6 +644,8 @@ export const buildRealtimeMonitorRows = (rows: MonitoringEventRow[]): Monitoring
       inputTokens: 0,
       outputTokens: 0,
       cachedTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
       totalTokens: 0,
       totalCost: 0,
       latencySum: 0,
@@ -529,6 +660,8 @@ export const buildRealtimeMonitorRows = (rows: MonitoringEventRow[]): Monitoring
     existing.inputTokens += row.inputTokens;
     existing.outputTokens += row.outputTokens;
     existing.cachedTokens += row.cachedTokens;
+    existing.cacheReadTokens += row.cacheReadTokens;
+    existing.cacheCreationTokens += row.cacheCreationTokens;
     existing.totalTokens += row.totalTokens;
     existing.totalCost += row.totalCost;
 
@@ -569,6 +702,8 @@ export const buildRealtimeMonitorRows = (rows: MonitoringEventRow[]): Monitoring
         inputTokens: item.inputTokens,
         outputTokens: item.outputTokens,
         cachedTokens: item.cachedTokens,
+        cacheReadTokens: item.cacheReadTokens,
+        cacheCreationTokens: item.cacheCreationTokens,
         totalTokens: item.totalTokens,
         totalCost: item.totalCost,
         lastSeenAt: item.lastSeenAt,

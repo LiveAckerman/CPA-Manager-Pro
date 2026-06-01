@@ -35,14 +35,21 @@ func Migrate(db *sql.DB) error {
 			auth_snapshot_at_ms integer,
 			requested_model text,
 			resolved_model text,
+			reasoning_effort text,
 			input_tokens integer not null default 0,
 			output_tokens integer not null default 0,
 			reasoning_tokens integer not null default 0,
 			cached_tokens integer not null default 0,
 			cache_tokens integer not null default 0,
+			cache_read_tokens integer not null default 0,
+			cache_creation_tokens integer not null default 0,
 			total_tokens integer not null default 0,
 			latency_ms integer,
+			ttft_ms integer,
 			failed integer not null default 0,
+			fail_status_code integer,
+			fail_summary text,
+			fail_body text,
 			raw_json text,
 			created_at_ms integer not null
 		)`,
@@ -67,6 +74,8 @@ func Migrate(db *sql.DB) error {
 			prompt_per_1m real not null,
 			completion_per_1m real not null,
 			cache_per_1m real not null,
+			cache_read_per_1m real not null default 0,
+			cache_creation_per_1m real not null default 0,
 			source text,
 			source_model_id text,
 			raw_json text,
@@ -93,6 +102,7 @@ func Migrate(db *sql.DB) error {
 			delete_count integer not null default 0,
 			disable_count integer not null default 0,
 			enable_count integer not null default 0,
+			reauth_count integer not null default 0,
 			keep_count integer not null default 0,
 			error text,
 			settings_json text not null,
@@ -116,6 +126,9 @@ func Migrate(db *sql.DB) error {
 			state text,
 			action text not null,
 			action_reason text,
+			action_status text,
+			executed_action text,
+			action_error text,
 			status_code integer,
 			used_percent real,
 			is_quota integer not null default 0,
@@ -141,7 +154,108 @@ func Migrate(db *sql.DB) error {
 			return err
 		}
 	}
-	return ensureUsageEventSnapshotColumns(db)
+	if err := ensureUsageEventSnapshotColumns(db); err != nil {
+		return err
+	}
+	if err := ensureCodexInspectionRunColumns(db); err != nil {
+		return err
+	}
+	if err := ensureCodexInspectionResultColumns(db); err != nil {
+		return err
+	}
+	return ensureModelPriceColumns(db)
+}
+
+func ensureCodexInspectionRunColumns(db *sql.DB) error {
+	rows, err := db.Query(`pragma table_info(codex_inspection_runs)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	existing := map[string]struct{}{}
+	for rows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		existing[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{name: "reauth_count", definition: "integer not null default 0"},
+	}
+	for _, column := range columns {
+		if _, ok := existing[column.name]; ok {
+			continue
+		}
+		if _, err := db.Exec(fmt.Sprintf(
+			`alter table codex_inspection_runs add column %s %s`,
+			column.name,
+			column.definition,
+		)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureCodexInspectionResultColumns(db *sql.DB) error {
+	rows, err := db.Query(`pragma table_info(codex_inspection_results)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	existing := map[string]struct{}{}
+	for rows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		existing[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{name: "action_status", definition: "text"},
+		{name: "executed_action", definition: "text"},
+		{name: "action_error", definition: "text"},
+	}
+	for _, column := range columns {
+		if _, ok := existing[column.name]; ok {
+			continue
+		}
+		if _, err := db.Exec(fmt.Sprintf(
+			`alter table codex_inspection_results add column %s %s`,
+			column.name,
+			column.definition,
+		)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ensureUsageEventSnapshotColumns(db *sql.DB) error {
@@ -180,6 +294,13 @@ func ensureUsageEventSnapshotColumns(db *sql.DB) error {
 		{name: "auth_snapshot_at_ms", definition: "integer"},
 		{name: "requested_model", definition: "text"},
 		{name: "resolved_model", definition: "text"},
+		{name: "reasoning_effort", definition: "text"},
+		{name: "cache_read_tokens", definition: "integer not null default 0"},
+		{name: "cache_creation_tokens", definition: "integer not null default 0"},
+		{name: "ttft_ms", definition: "integer"},
+		{name: "fail_status_code", definition: "integer"},
+		{name: "fail_summary", definition: "text"},
+		{name: "fail_body", definition: "text"},
 	}
 	for _, column := range columns {
 		if _, ok := existing[column.name]; ok {
@@ -187,6 +308,52 @@ func ensureUsageEventSnapshotColumns(db *sql.DB) error {
 		}
 		if _, err := db.Exec(fmt.Sprintf(
 			`alter table usage_events add column %s %s`,
+			column.name,
+			column.definition,
+		)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureModelPriceColumns(db *sql.DB) error {
+	rows, err := db.Query(`pragma table_info(model_prices)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	existing := map[string]struct{}{}
+	for rows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		existing[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{name: "cache_read_per_1m", definition: "real not null default 0"},
+		{name: "cache_creation_per_1m", definition: "real not null default 0"},
+	}
+	for _, column := range columns {
+		if _, ok := existing[column.name]; ok {
+			continue
+		}
+		if _, err := db.Exec(fmt.Sprintf(
+			`alter table model_prices add column %s %s`,
 			column.name,
 			column.definition,
 		)); err != nil {

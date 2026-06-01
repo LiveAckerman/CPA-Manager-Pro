@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
+import { IconEye, IconEyeOff, IconX } from '@/components/ui/icons';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
@@ -8,11 +10,14 @@ import styles from '../ConfigPage.module.scss';
 
 type ManagerConfigPanelProps = {
   managerLoading: boolean;
+  managerSaving: boolean;
   panelHostedByUsageService: boolean | null;
   detectedPanelBase: string;
   managerRuntimeModeLabel: string;
   managerServiceBase: string;
   managerAdminKey: string;
+  managerCPAManagementKey: string;
+  managerHasBoundCPAManagementKey: boolean;
   currentCPAApiBase: string;
   managerBoundCPABase: string;
   managerBindingStatus: ManagerBindingStatus;
@@ -30,6 +35,7 @@ type ManagerConfigPanelProps = {
   onRefresh: () => void;
   onManagerServiceBaseChange: (value: string) => void;
   onManagerAdminKeyChange: (value: string) => void;
+  onManagerCPAManagementKeyChange: (value: string) => void;
   onRequestMonitoringChange: (value: boolean) => void;
   onCollectorModeChange: (value: string) => void;
   onPollIntervalMsChange: (value: string) => void;
@@ -39,11 +45,14 @@ type ManagerConfigPanelProps = {
 
 export function ManagerConfigPanel({
   managerLoading,
+  managerSaving,
   panelHostedByUsageService,
   detectedPanelBase,
   managerRuntimeModeLabel,
   managerServiceBase,
   managerAdminKey,
+  managerCPAManagementKey,
+  managerHasBoundCPAManagementKey,
   currentCPAApiBase,
   managerBoundCPABase,
   managerBindingStatus,
@@ -61,6 +70,7 @@ export function ManagerConfigPanel({
   onRefresh,
   onManagerServiceBaseChange,
   onManagerAdminKeyChange,
+  onManagerCPAManagementKeyChange,
   onRequestMonitoringChange,
   onCollectorModeChange,
   onPollIntervalMsChange,
@@ -68,6 +78,7 @@ export function ManagerConfigPanel({
   onQueryLimitChange,
 }: ManagerConfigPanelProps) {
   const { t } = useTranslation();
+  const [cpaKeyRevealed, setCpaKeyRevealed] = useState(false);
   const isExternalPanel = panelHostedByUsageService !== true;
   const bindingNoteClass =
     managerBindingStatus === 'matched'
@@ -75,6 +86,9 @@ export function ManagerConfigPanel({
       : managerBindingStatus === 'mismatched'
         ? styles.managerStatusDanger
         : styles.managerStatusWarning;
+  const cpaKeyInputDisabled = disableControls || managerLoading;
+  const cpaKeyHasInput = managerCPAManagementKey.length > 0;
+  const showCpaKeySavingHint = managerSaving && managerCPAManagementKey.trim().length > 0;
 
   return (
     <div className={styles.managerConfigPanel}>
@@ -146,6 +160,78 @@ export function ManagerConfigPanel({
         {isExternalPanel && managerBindingStatus !== 'unknown' ? (
           <div className={`${styles.managerStatusNote} ${bindingNoteClass}`}>
             {t(`config_management.manager.binding_${managerBindingStatus}`)}
+          </div>
+        ) : null}
+      </section>
+
+      <section className={styles.managerSection}>
+        <div className={styles.managerSectionHeader}>
+          <div>
+            <h3>{t('config_management.manager.cpa_management_key_section_title')}</h3>
+            <p>{t('config_management.manager.cpa_management_key_section_hint')}</p>
+          </div>
+          <span
+            className={`${styles.managerKeyBindingBadge} ${
+              managerHasBoundCPAManagementKey
+                ? styles.managerKeyBindingBadgeBound
+                : styles.managerKeyBindingBadgeUnbound
+            }`}
+          >
+            {managerHasBoundCPAManagementKey
+              ? t('config_management.manager.cpa_management_key_binding_bound')
+              : t('config_management.manager.cpa_management_key_binding_unbound')}
+          </span>
+        </div>
+
+        <Input
+          label={t('config_management.manager.cpa_management_key_label')}
+          type={cpaKeyRevealed ? 'text' : 'password'}
+          placeholder={t('config_management.manager.cpa_management_key_placeholder')}
+          value={managerCPAManagementKey}
+          onChange={(event) => onManagerCPAManagementKeyChange(event.target.value)}
+          disabled={cpaKeyInputDisabled}
+          autoComplete="off"
+          className={styles.managerCpaKeyInput}
+          rightElement={
+            <div className={styles.managerKeyInputActions}>
+              <button
+                type="button"
+                className={styles.managerKeyIconButton}
+                onClick={() => setCpaKeyRevealed((prev) => !prev)}
+                disabled={cpaKeyInputDisabled || !cpaKeyHasInput}
+                aria-label={t(
+                  cpaKeyRevealed
+                    ? 'config_management.manager.cpa_management_key_hide'
+                    : 'config_management.manager.cpa_management_key_reveal'
+                )}
+                title={t(
+                  cpaKeyRevealed
+                    ? 'config_management.manager.cpa_management_key_hide'
+                    : 'config_management.manager.cpa_management_key_reveal'
+                )}
+              >
+                {cpaKeyRevealed ? <IconEyeOff size={16} /> : <IconEye size={16} />}
+              </button>
+              <button
+                type="button"
+                className={styles.managerKeyIconButton}
+                onClick={() => {
+                  onManagerCPAManagementKeyChange('');
+                  setCpaKeyRevealed(false);
+                }}
+                disabled={cpaKeyInputDisabled || !cpaKeyHasInput}
+                aria-label={t('config_management.manager.cpa_management_key_clear')}
+                title={t('config_management.manager.cpa_management_key_clear')}
+              >
+                <IconX size={16} />
+              </button>
+            </div>
+          }
+        />
+
+        {showCpaKeySavingHint ? (
+          <div className={styles.managerKeySavingHint}>
+            {t('config_management.manager.cpa_management_key_saving')}
           </div>
         ) : null}
       </section>

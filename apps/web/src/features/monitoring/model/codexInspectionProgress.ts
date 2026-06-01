@@ -16,6 +16,7 @@ export const createEmptyProgressSummary = (): CodexInspectionProgressSummary => 
   deleteCount: 0,
   disableCount: 0,
   enableCount: 0,
+  reauthCount: 0,
   keepCount: 0,
 });
 
@@ -28,7 +29,8 @@ export const buildProgressSummary = (
   const deleteCount = results.filter((item) => item.action === 'delete').length;
   const disableCount = results.filter((item) => item.action === 'disable').length;
   const enableCount = results.filter((item) => item.action === 'enable').length;
-  const keepCount = results.length - deleteCount - disableCount - enableCount;
+  const reauthCount = results.filter((item) => item.action === 'reauth').length;
+  const keepCount = results.length - deleteCount - disableCount - enableCount - reauthCount;
 
   return {
     totalFiles: files.length,
@@ -37,6 +39,7 @@ export const buildProgressSummary = (
     deleteCount,
     disableCount,
     enableCount,
+    reauthCount,
     keepCount,
   };
 };
@@ -74,7 +77,8 @@ export const buildSummary = (
   const deleteCount = results.filter((item) => item.action === 'delete').length;
   const disableCount = results.filter((item) => item.action === 'disable').length;
   const enableCount = results.filter((item) => item.action === 'enable').length;
-  const keepCount = results.length - deleteCount - disableCount - enableCount;
+  const reauthCount = results.filter((item) => item.action === 'reauth').length;
+  const keepCount = results.length - deleteCount - disableCount - enableCount - reauthCount;
   const preview = results
     .filter((item) => item.action !== 'keep')
     .slice(0, 10)
@@ -89,6 +93,7 @@ export const buildSummary = (
     deleteCount,
     disableCount,
     enableCount,
+    reauthCount,
     keepCount,
     usedPercentThreshold: settings.usedPercentThreshold,
     sampled: settings.sampleSize > 0 && settings.sampleSize < sampledAccounts.length,

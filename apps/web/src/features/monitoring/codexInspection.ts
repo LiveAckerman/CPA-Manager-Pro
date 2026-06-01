@@ -53,11 +53,20 @@ export {
 export { executeCodexInspectionActions } from '@/features/monitoring/model/codexInspectionExecution';
 
 export type CodexInspectionLogLevel = 'info' | 'success' | 'warning' | 'error';
-export type CodexInspectionAction = 'keep' | 'delete' | 'disable' | 'enable';
-export type CodexInspectionExecutionAction = Exclude<CodexInspectionAction, 'keep'>;
+export type CodexInspectionAction = 'keep' | 'delete' | 'disable' | 'enable' | 'reauth';
+export type CodexInspectionExecutionAction = Extract<
+  CodexInspectionAction,
+  'delete' | 'disable' | 'enable'
+>;
 export type CodexInspectionProgressStatus = 'idle' | 'running' | 'paused' | 'stopped' | 'completed';
-export type CodexInspectionAutoActionMode = 'none' | 'disable' | 'delete';
-export type CodexInspectionStoredActionFilter = 'all' | 'delete' | 'disable' | 'enable';
+export type CodexInspectionAutoActionMode = 'none' | 'enable' | 'disable' | 'delete';
+export type CodexInspectionStoredActionFilter =
+  | 'all'
+  | 'delete'
+  | 'disable'
+  | 'enable'
+  | 'reauth'
+  | 'http_401';
 
 export interface CodexInspectionSettings {
   baseUrl: string;
@@ -124,6 +133,7 @@ export interface CodexInspectionSummary {
   deleteCount: number;
   disableCount: number;
   enableCount: number;
+  reauthCount: number;
   keepCount: number;
   usedPercentThreshold: number;
   sampled: boolean;
@@ -137,6 +147,7 @@ export interface CodexInspectionProgressSummary {
   deleteCount: number;
   disableCount: number;
   enableCount: number;
+  reauthCount: number;
   keepCount: number;
 }
 
@@ -383,7 +394,7 @@ export const createCodexInspectionSession = ({
     emitProgress();
     onLog?.(
       'success',
-      `巡检完成：删除 ${finalResult.summary.deleteCount}、禁用 ${finalResult.summary.disableCount}、启用 ${finalResult.summary.enableCount}、保留 ${finalResult.summary.keepCount}`
+      `巡检完成：删除 ${finalResult.summary.deleteCount}、禁用 ${finalResult.summary.disableCount}、启用 ${finalResult.summary.enableCount}、重新登录 ${finalResult.summary.reauthCount}、保留 ${finalResult.summary.keepCount}`
     );
     currentDeferred.resolve(finalResult);
   };
@@ -596,6 +607,9 @@ export const buildExecutionFailureMessage = (outcome: CodexInspectionExecutionOu
 
 export const isSuggestedAction = (item: CodexInspectionResultItem) => item.action !== 'keep';
 
+export const isExecutableAction = (item: CodexInspectionResultItem) =>
+  item.action === 'delete' || item.action === 'disable' || item.action === 'enable';
+
 export const resolveCodexInspectionAutoActionItems = (
   mode: CodexInspectionAutoActionMode,
   items: CodexInspectionResultItem[]
@@ -603,9 +617,13 @@ export const resolveCodexInspectionAutoActionItems = (
   const normalizedMode = normalizeAutoActionMode(mode);
   if (normalizedMode === 'none') return [];
 
+  if (normalizedMode === 'enable') {
+    return items.filter((item) => item.action === 'enable');
+  }
+
   if (normalizedMode === 'disable') {
     return items
-      .filter((item) => item.action === 'delete' || item.action === 'disable')
+      .filter((item) => item.action === 'delete' || item.action === 'disable' || item.action === 'enable')
       .map((item) =>
         item.action === 'delete'
           ? {
@@ -619,7 +637,7 @@ export const resolveCodexInspectionAutoActionItems = (
       );
   }
 
-  return items.filter((item) => item.action === 'delete' || item.action === 'disable');
+  return items.filter((item) => item.action === 'delete' || item.action === 'disable' || item.action === 'enable');
 };
 
 export const isCodexInspectionStoppedError = (
@@ -674,7 +692,9 @@ export const applyCodexInspectionExecutionResult = (
   const deleteCount = nextResults.filter((item) => item.action === 'delete').length;
   const disableCount = nextResults.filter((item) => item.action === 'disable').length;
   const enableCount = nextResults.filter((item) => item.action === 'enable').length;
-  const keepCount = nextResults.length - deleteCount - disableCount - enableCount;
+  const reauthCount = nextResults.filter((item) => item.action === 'reauth').length;
+  const keepCount =
+    nextResults.length - deleteCount - disableCount - enableCount - reauthCount;
   const plannedActionPreview = nextResults
     .filter((item) => item.action !== 'keep')
     .slice(0, 10)
@@ -692,6 +712,7 @@ export const applyCodexInspectionExecutionResult = (
       deleteCount,
       disableCount,
       enableCount,
+      reauthCount,
       keepCount,
       plannedActionPreview,
     },
@@ -700,7 +721,7 @@ export const applyCodexInspectionExecutionResult = (
 };
 
 export const buildSuggestedActionCountLabel = (summary: CodexInspectionSummary) =>
-  summary.deleteCount + summary.disableCount + summary.enableCount;
+  summary.deleteCount + summary.disableCount + summary.enableCount + summary.reauthCount;
 
 export const getProbeFailureMessage = (result: CodexInspectionResultItem) =>
   result.error ||

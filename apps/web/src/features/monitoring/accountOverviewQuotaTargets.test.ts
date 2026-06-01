@@ -18,6 +18,8 @@ const createAccountRow = (overrides: Partial<MonitoringAccountRow> = {}): Monito
   inputTokens: overrides.inputTokens ?? 0,
   outputTokens: overrides.outputTokens ?? 0,
   cachedTokens: overrides.cachedTokens ?? 0,
+  cacheReadTokens: overrides.cacheReadTokens ?? 0,
+  cacheCreationTokens: overrides.cacheCreationTokens ?? 0,
   totalTokens: overrides.totalTokens ?? 0,
   totalCost: overrides.totalCost ?? 0,
   averageLatencyMs: overrides.averageLatencyMs ?? null,

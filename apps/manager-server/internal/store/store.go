@@ -45,6 +45,8 @@ type TimelinePoint = usageevent.TimelinePoint
 type HourlyPoint = usageevent.HourlyPoint
 type ChannelModelStat = usageevent.ChannelModelStat
 type FailureSourceStat = usageevent.FailureSourceStat
+type AccountModelStat = usageevent.AccountModelStat
+type APIKeyModelStat = usageevent.APIKeyModelStat
 type TaskBucket = usageevent.TaskBucket
 type EventPageItem = usageevent.EventPageItem
 type EventsPage = usageevent.EventsPage
@@ -265,6 +267,14 @@ func (s *Store) ChannelModelStatsWithFilter(ctx context.Context, filter Analytic
 
 func (s *Store) FailureSourcesWithFilter(ctx context.Context, filter AnalyticsFilter) ([]FailureSourceStat, error) {
 	return s.UsageEvents.FailureSourcesWithFilter(ctx, filter)
+}
+
+func (s *Store) AccountModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]AccountModelStat, error) {
+	return s.UsageEvents.AccountModelStatsWithFilter(ctx, filter)
+}
+
+func (s *Store) APIKeyModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]APIKeyModelStat, error) {
+	return s.UsageEvents.APIKeyModelStatsWithFilter(ctx, filter)
 }
 
 func (s *Store) TaskBucketsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]TaskBucket, error) {

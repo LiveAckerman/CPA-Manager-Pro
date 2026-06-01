@@ -15,6 +15,16 @@ import {
   type CodexInspectionResultItem,
   type CodexInspectionRunResult,
 } from './codexInspection';
+import {
+  buildConfigOverviewItems,
+  countActions,
+  filterByAction,
+  getCanonicalServerCodexInspectionActionIds,
+  getMixedServerCodexInspectionActionIds,
+  isActionableServerCodexInspectionResult,
+  normalizeServerCodexInspectionActionStatus,
+  validateInspectionConfigDraft,
+} from './model/codexInspectionPresentation';
 
 const createStorage = () => {
   const values = new Map<string, string>();
@@ -92,6 +102,7 @@ const createRunResult = (): CodexInspectionRunResult => {
       deleteCount: 1,
       disableCount: 0,
       enableCount: 0,
+      reauthCount: 0,
       keepCount: 0,
       usedPercentThreshold: 90,
       sampled: false,
@@ -111,9 +122,128 @@ describe('Codex inspection settings', () => {
   it('migrates legacy auto execute settings to auto disable', () => {
     const storage = createStorage();
     vi.stubGlobal('localStorage', storage);
-    storage.setItem(CODEX_INSPECTION_SETTINGS_STORAGE_KEY, JSON.stringify({ autoExecuteActions: true }));
+    storage.setItem(
+      CODEX_INSPECTION_SETTINGS_STORAGE_KEY,
+      JSON.stringify({ autoExecuteActions: true })
+    );
 
     expect(loadCodexInspectionConfigurableSettings(null).autoActionMode).toBe('disable');
+  });
+
+  it('validates shared config drafts before saving', () => {
+    const t = ((key: string, values?: Record<string, unknown>) => {
+      if (key === 'monitoring.codex_inspection_settings_invalid_integer') {
+        return `${values?.field} >= ${values?.min}`;
+      }
+      if (key === 'monitoring.codex_inspection_settings_invalid_threshold') {
+        return `${values?.field} 0-100`;
+      }
+      return key;
+    }) as never;
+
+    const invalid = validateInspectionConfigDraft(
+      {
+        targetType: ' ',
+        workers: '0',
+        deleteWorkers: '2',
+        timeout: '15000',
+        retries: '-1',
+        userAgent: 'agent',
+        usedPercentThreshold: '120',
+        sampleSize: 'all',
+        autoActionMode: 'delete',
+      },
+      t
+    );
+
+    expect(invalid.ok).toBe(false);
+    expect(invalid.errors.targetType).toBe(
+      'monitoring.codex_inspection_settings_target_type_required'
+    );
+    expect(invalid.errors.workers).toContain('>= 1');
+    expect(invalid.errors.retries).toContain('>= 0');
+    expect(invalid.errors.usedPercentThreshold).toContain('0-100');
+    expect(invalid.errors.sampleSize).toContain('>= 0');
+
+    const valid = validateInspectionConfigDraft(
+      {
+        targetType: ' Codex ',
+        workers: '3',
+        deleteWorkers: '2',
+        timeout: '15000',
+        retries: '0',
+        userAgent: ' agent ',
+        usedPercentThreshold: '99.5',
+        sampleSize: '0',
+        autoActionMode: 'unexpected',
+      },
+      t
+    );
+
+    expect(valid.ok).toBe(true);
+    expect(valid.values).toEqual({
+      targetType: 'Codex',
+      workers: 3,
+      deleteWorkers: 2,
+      timeout: 15000,
+      retries: 0,
+      userAgent: 'agent',
+      usedPercentThreshold: 99.5,
+      sampleSize: 0,
+      autoActionMode: 'none',
+    });
+  });
+
+  it('builds local and server config overview items from the shared model', () => {
+    const labels: Record<string, string> = {
+      'monitoring.codex_inspection_threshold': 'Threshold',
+      'monitoring.codex_inspection_sample_size': 'Sample',
+      'monitoring.codex_inspection_settings_auto_action_mode_label': 'Auto',
+      'monitoring.codex_inspection_settings_auto_action_mode_delete': 'Auto delete',
+      'monitoring.codex_inspection_workers': 'Workers',
+      'monitoring.codex_inspection_settings_timeout_label': 'Timeout',
+      'monitoring.codex_inspection_target_type': 'Target',
+      'monitoring.server_codex_inspection_sample_all': 'All',
+      'monitoring.server_codex_inspection_config_summary_schedule': 'Schedule',
+      'monitoring.server_codex_inspection_config_summary_trigger': 'Trigger',
+      'monitoring.server_codex_inspection_config_summary_threshold': 'Threshold',
+      'monitoring.server_codex_inspection_config_summary_sample': 'Sample',
+      'monitoring.server_codex_inspection_config_summary_auto': 'Auto',
+      'monitoring.server_codex_inspection_schedule_enabled': 'Enabled',
+      'monitoring.server_codex_inspection_schedule_disabled': 'Disabled',
+    };
+    const t = ((key: string) => labels[key] ?? key) as never;
+    const settings = {
+      targetType: 'codex',
+      workers: 4,
+      timeout: 15000,
+      usedPercentThreshold: 100,
+      sampleSize: 0,
+      autoActionMode: 'delete' as const,
+    };
+
+    expect(buildConfigOverviewItems(settings, { mode: 'local', t })).toMatchObject([
+      { key: 'threshold', value: '100%', field: 'usedPercentThreshold' },
+      { key: 'sample', value: 'All', field: 'sampleSize' },
+      { key: 'auto', value: 'Auto delete', tone: 'bad', field: 'autoActionMode' },
+      { key: 'concurrency', value: '4', hint: 'Timeout: 15000', field: 'workers' },
+      { key: 'target', value: 'codex', field: 'targetType' },
+    ]);
+
+    expect(
+      buildConfigOverviewItems(settings, {
+        mode: 'server',
+        t,
+        scheduleEnabled: true,
+        scheduleLabel: 'Every 60 minutes',
+      })
+    ).toMatchObject([
+      { key: 'schedule', value: 'Enabled', tone: 'good', field: 'schedule' },
+      { key: 'trigger', value: 'Every 60 minutes', field: 'schedule' },
+      { key: 'threshold', value: '100%', field: 'usedPercentThreshold' },
+      { key: 'sample', value: 'All', field: 'sampleSize' },
+      { key: 'auto', value: 'Auto delete', tone: 'bad', field: 'autoActionMode' },
+    ]);
   });
 });
 
@@ -121,9 +251,28 @@ describe('resolveCodexInspectionAutoActionItems', () => {
   const deleteItem = createResultItem('delete');
   const disableItem = createResultItem('disable');
   const enableItem = createResultItem('enable');
+  const reauthItem = createResultItem('reauth', { statusCode: 401 });
 
   it('does nothing when automatic mode is none', () => {
-    expect(resolveCodexInspectionAutoActionItems('none', [deleteItem, disableItem, enableItem])).toEqual([]);
+    expect(
+      resolveCodexInspectionAutoActionItems('none', [
+        deleteItem,
+        disableItem,
+        enableItem,
+        reauthItem,
+      ])
+    ).toEqual([]);
+  });
+
+  it('only enables recovered accounts in auto enable mode', () => {
+    const items = resolveCodexInspectionAutoActionItems('enable', [
+      deleteItem,
+      disableItem,
+      enableItem,
+      reauthItem,
+    ]);
+
+    expect(items.map((item) => [item.fileName, item.action])).toEqual([['enable.json', 'enable']]);
   });
 
   it('turns delete suggestions into disable actions in auto disable mode', () => {
@@ -131,25 +280,119 @@ describe('resolveCodexInspectionAutoActionItems', () => {
       deleteItem,
       disableItem,
       enableItem,
+      reauthItem,
     ]);
 
     expect(items.map((item) => [item.fileName, item.action])).toEqual([
       ['delete.json', 'disable'],
       ['disable.json', 'disable'],
+      ['enable.json', 'enable'],
     ]);
   });
 
-  it('keeps delete and disable suggestions in auto delete mode', () => {
+  it('keeps delete, disable, and enable suggestions in auto delete mode', () => {
     const items = resolveCodexInspectionAutoActionItems('delete', [
       deleteItem,
       disableItem,
       enableItem,
+      reauthItem,
     ]);
 
     expect(items.map((item) => [item.fileName, item.action])).toEqual([
       ['delete.json', 'delete'],
       ['disable.json', 'disable'],
+      ['enable.json', 'enable'],
     ]);
+  });
+});
+
+describe('Codex inspection action presentation', () => {
+  it('counts reauth suggestions and filters 401 results independently', () => {
+    const items = [
+      createResultItem('delete', { statusCode: 500 }),
+      createResultItem('reauth', { statusCode: 401 }),
+      createResultItem('keep', { statusCode: 401 }),
+    ];
+
+    expect(countActions(items)).toEqual({
+      delete: 1,
+      disable: 0,
+      enable: 0,
+      reauth: 1,
+      http401: 2,
+    });
+    expect(filterByAction(items, 'reauth').map((item) => item.action)).toEqual(['reauth']);
+    expect(filterByAction(items, 'http_401').map((item) => item.statusCode)).toEqual([401, 401]);
+  });
+});
+
+describe('Server Codex inspection action presentation', () => {
+  it('normalizes pending action status for server results', () => {
+    expect(normalizeServerCodexInspectionActionStatus({ action: 'delete' })).toBe('pending');
+    expect(normalizeServerCodexInspectionActionStatus({ action: 'keep' })).toBe('none');
+    expect(
+      normalizeServerCodexInspectionActionStatus({
+        action: 'delete',
+        actionStatus: 'needs_review',
+      })
+    ).toBe('needs_review');
+    expect(isActionableServerCodexInspectionResult({ id: 1, action: 'disable' })).toBe(true);
+    expect(
+      isActionableServerCodexInspectionResult({
+        id: 2,
+        action: 'disable',
+        actionStatus: 'success',
+      })
+    ).toBe(false);
+    expect(
+      isActionableServerCodexInspectionResult({
+        id: 3,
+        action: 'delete',
+        actionStatus: 'needs_review',
+      })
+    ).toBe(false);
+  });
+
+  it('exposes only the first file-level server action as executable', () => {
+    const canonicalIds = getCanonicalServerCodexInspectionActionIds([
+      { id: 1, fileName: 'auth-a.json', action: 'delete', actionStatus: 'success' },
+      { id: 2, fileName: 'auth-a.json', action: 'delete', actionStatus: 'pending' },
+      { id: 3, fileName: 'auth-b.json', action: 'disable', actionStatus: 'failed' },
+      { id: 4, fileName: 'auth-c.json', action: 'reauth' },
+    ]);
+
+    expect(Array.from(canonicalIds)).toEqual([3]);
+  });
+
+  it('suppresses file-level server actions when same-file suggestions conflict', () => {
+    const results = [
+      { id: 1, fileName: 'auth-a.json', action: 'enable', actionStatus: 'pending' },
+      { id: 2, fileName: 'auth-a.json', action: 'delete', actionStatus: 'pending' },
+    ];
+    const canonicalIds = getCanonicalServerCodexInspectionActionIds(results);
+    const mixedIds = getMixedServerCodexInspectionActionIds(results);
+
+    expect(Array.from(canonicalIds)).toEqual([]);
+    expect(Array.from(mixedIds)).toEqual([1, 2]);
+  });
+
+  it('keeps one canonical action per same-action file group', () => {
+    const canonicalIds = getCanonicalServerCodexInspectionActionIds([
+      { id: 1, fileName: 'auth-a.json', action: 'delete', actionStatus: 'pending' },
+      { id: 2, fileName: 'auth-a.json', action: 'delete', actionStatus: 'pending' },
+    ]);
+
+    expect(Array.from(canonicalIds)).toEqual([1]);
+  });
+
+  it('keeps canonical actions for different files independently', () => {
+    const canonicalIds = getCanonicalServerCodexInspectionActionIds([
+      { id: 1, fileName: 'auth-a.json', action: 'delete', actionStatus: 'pending' },
+      { id: 2, fileName: 'auth-b.json', action: 'enable', actionStatus: 'failed' },
+      { id: 3, fileName: 'auth-c.json', action: 'disable', actionStatus: 'needs_review' },
+    ]);
+
+    expect(Array.from(canonicalIds)).toEqual([1, 2]);
   });
 });
 
@@ -196,7 +439,10 @@ describe('Codex inspection last-run cache', () => {
     );
 
     expect(fingerprint).toBe(
-      createCodexInspectionConnectionFingerprint('https://cpa.example.test', 'management-secret-token')
+      createCodexInspectionConnectionFingerprint(
+        'https://cpa.example.test',
+        'management-secret-token'
+      )
     );
     expect(fingerprint).not.toContain('management-secret-token');
     expect(fingerprint).not.toContain('cpa.example.test');
@@ -323,5 +569,32 @@ describe('Codex inspection last-run cache', () => {
     expect(loaded?.actionFilter).toBe('delete');
     expect(loaded?.logs).toHaveLength(1);
     expect(loaded?.result.summary.deleteCount).toBe(1);
+  });
+
+  it('stores and restores reauth suggestions and 401 filters', () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+    const baseResult = createRunResult();
+    const reauthResult: CodexInspectionRunResult = {
+      ...baseResult,
+      results: [createResultItem('reauth', { statusCode: 401 })],
+      summary: {
+        ...baseResult.summary,
+        deleteCount: 0,
+        reauthCount: 1,
+        plannedActionPreview: ['reauth@example.com -> reauth'],
+      },
+    };
+
+    saveCodexInspectionLastRun({
+      result: reauthResult,
+      actionFilter: 'http_401',
+    });
+
+    const loaded = loadCodexInspectionLastRun();
+
+    expect(loaded?.actionFilter).toBe('http_401');
+    expect(loaded?.result.results[0].action).toBe('reauth');
+    expect(loaded?.result.summary.reauthCount).toBe(1);
   });
 });

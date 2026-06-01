@@ -1231,6 +1231,106 @@
   line-height: 1.45;
 }
 
+.realtimeMetricCell,
+.realtimeTimeCell {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: var(--monitor-ink);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+
+.realtimeTimeLine,
+.realtimeTpsCell {
+  white-space: nowrap;
+}
+
+.realtimeLatencyColumn {
+  text-align: center !important;
+}
+
+.realtimeLatencyHeader {
+  display: inline-grid;
+  grid-template-columns: minmax(42px, 1fr) 10px minmax(42px, 1fr);
+  align-items: center;
+  justify-content: center;
+  width: 118px;
+  font-size: 12px;
+  line-height: 1.25;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.realtimeMetricCell {
+  display: inline-grid;
+  grid-template-columns: minmax(48px, 1fr) 10px minmax(48px, 1fr);
+  align-items: center;
+  justify-content: center;
+  width: 118px;
+  min-width: 118px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.realtimeTpsColumn {
+  text-align: center !important;
+}
+
+.realtimeTpsCell {
+  display: inline-block;
+  min-width: 48px;
+  font-variant-numeric: tabular-nums;
+}
+
+.realtimeTimeCell {
+  min-width: 94px;
+}
+
+.realtimeTimeLine {
+  width: 92px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+
+.realtimeMetricText {
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+
+.realtimeMetricLeft {
+  min-width: 0;
+  text-align: right;
+}
+
+.realtimeMetricRight {
+  min-width: 0;
+  text-align: left;
+}
+
+.realtimeMetricText.goodText {
+  color: var(--monitor-green);
+}
+
+.realtimeMetricText.warnText {
+  color: var(--monitor-amber);
+}
+
+.realtimeMetricText.badText {
+  color: var(--monitor-red);
+}
+
+.realtimeMetricSeparator {
+  color: var(--monitor-line);
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: center;
+}
+
 .logTypeCell {
   display: block;
   align-items: center;
@@ -1813,7 +1913,7 @@
   }
 
   .realtimeTable {
-    min-width: 1180px;
+    min-width: 1260px;
   }
 }
 

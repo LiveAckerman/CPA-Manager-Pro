@@ -105,7 +105,7 @@ export interface ManagerExternalUsageServiceConfig {
 }
 
 export type ManagerCodexInspectionScheduleMode = 'interval' | 'time_points';
-export type ManagerCodexInspectionAutoActionMode = 'none' | 'disable' | 'delete';
+export type ManagerCodexInspectionAutoActionMode = 'none' | 'enable' | 'disable' | 'delete';
 
 export interface ManagerCodexInspectionScheduleConfig {
   mode?: ManagerCodexInspectionScheduleMode | string;
@@ -163,6 +163,7 @@ export interface CodexInspectionRun {
   deleteCount: number;
   disableCount: number;
   enableCount: number;
+  reauthCount: number;
   keepCount: number;
   error?: string;
   settings?: ManagerCodexInspectionConfig;
@@ -184,6 +185,9 @@ export interface CodexInspectionResult {
   state?: string;
   action: string;
   actionReason: string;
+  actionStatus?: string;
+  executedAction?: string;
+  actionError?: string;
   statusCode?: number;
   usedPercent?: number;
   isQuota: boolean;
@@ -208,6 +212,22 @@ export interface CodexInspectionRunDetail {
   run: CodexInspectionRun;
   results: CodexInspectionResult[];
   logs: CodexInspectionLog[];
+}
+
+export interface CodexInspectionActionOutcome {
+  resultId?: number;
+  accountKey?: string;
+  fileName: string;
+  displayAccount: string;
+  action: string;
+  status: string;
+  success: boolean;
+  error?: string;
+}
+
+export interface CodexInspectionActionsResponse {
+  outcomes: CodexInspectionActionOutcome[];
+  detail: CodexInspectionRunDetail;
 }
 
 export interface ModelPricesResponse {
@@ -284,6 +304,8 @@ export interface DashboardTodaySummary {
   input_tokens: number;
   output_tokens: number;
   cached_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
   reasoning_tokens: number;
   total_tokens: number;
   total_cost: number;
@@ -350,7 +372,7 @@ export interface DashboardTodayRequestHealthTimeline {
 }
 
 export interface DashboardTokenMixSegment {
-  key: 'input' | 'output' | 'reasoning' | 'cached' | string;
+  key: 'input' | 'output' | 'reasoning' | 'cached' | 'cache_read' | 'cache_creation' | string;
   tokens: number;
   share: number;
 }
@@ -369,6 +391,10 @@ export interface DashboardChannelHealth {
   auth_label?: string;
   account?: string;
   channel?: string;
+  source?: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_provider_snapshot?: string;
   calls: number;
   failures: number;
   failure_rate: number;
@@ -386,6 +412,9 @@ export interface DashboardFailureSource {
   account?: string;
   channel?: string;
   source?: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_provider_snapshot?: string;
   calls: number;
   failures: number;
   failure_rate: number;
@@ -405,8 +434,14 @@ export interface DashboardRecentFailure {
   channel?: string;
   api_key_alias?: string;
   source?: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_provider_snapshot?: string;
+  auth_project_id_snapshot?: string;
   endpoint: string;
   duration_ms: number | null;
+  fail_status_code?: number | null;
+  fail_summary?: string;
 }
 
 export interface DashboardSummaryResponse {
@@ -434,6 +469,8 @@ export interface DashboardSummaryParams {
 
 export interface MonitoringAnalyticsFilters {
   models?: string[];
+  providers?: string[];
+  accounts?: string[];
   auth_indices?: string[];
   api_key_hashes?: string[];
   source_hashes?: string[];
@@ -455,6 +492,9 @@ export interface MonitoringAnalyticsInclude {
   channel_share?: boolean;
   model_stats?: boolean;
   failure_sources?: boolean;
+  account_stats?: boolean;
+  api_key_stats?: boolean;
+  filter_options?: boolean;
   task_buckets?: boolean;
   recent_failures?: number;
   events_page?: MonitoringAnalyticsEventsPageRequest;
@@ -479,6 +519,8 @@ export interface MonitoringAnalyticsSummary {
   input_tokens: number;
   output_tokens: number;
   cached_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
   reasoning_tokens: number;
   total_tokens: number;
   total_cost: number;
@@ -525,12 +567,18 @@ export interface MonitoringAnalyticsModelStat {
   input_tokens: number;
   output_tokens: number;
   cached_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
   total_tokens: number;
   cost: number;
 }
 
 export interface MonitoringAnalyticsChannelShareRow {
   auth_index: string;
+  source?: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_provider_snapshot?: string;
   calls: number;
   success: number;
   failure: number;
@@ -540,12 +588,88 @@ export interface MonitoringAnalyticsChannelShareRow {
 }
 
 export interface MonitoringAnalyticsFailureSourceRow {
+  source?: string;
   source_hash: string;
   auth_index: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_provider_snapshot?: string;
   calls: number;
   failure: number;
   last_seen_ms: number;
   average_latency_ms: number | null;
+}
+
+export interface MonitoringAnalyticsAccountModelStatRow {
+  model: string;
+  calls: number;
+  success_calls: number;
+  failure_calls: number;
+  success_rate: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  total_tokens: number;
+  cost: number;
+  last_seen_ms: number;
+}
+
+export interface MonitoringAnalyticsAccountStatRow {
+  id: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_provider_snapshot?: string;
+  auth_indices?: string[];
+  sources?: string[];
+  source_hashes?: string[];
+  calls: number;
+  success_calls: number;
+  failure_calls: number;
+  success_rate: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  total_tokens: number;
+  cost: number;
+  average_latency_ms: number | null;
+  last_seen_ms: number;
+  models?: MonitoringAnalyticsAccountModelStatRow[];
+}
+
+export interface MonitoringAnalyticsApiKeyStatRow {
+  id: string;
+  api_key_hash: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_provider_snapshot?: string;
+  auth_indices?: string[];
+  sources?: string[];
+  source_hashes?: string[];
+  calls: number;
+  success_calls: number;
+  failure_calls: number;
+  success_rate: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  total_tokens: number;
+  cost: number;
+  average_latency_ms: number | null;
+  last_seen_ms: number;
+  models?: MonitoringAnalyticsAccountModelStatRow[];
+}
+
+export interface MonitoringAnalyticsFilterOptions {
+  account_stats?: MonitoringAnalyticsAccountStatRow[];
+  api_key_stats?: MonitoringAnalyticsApiKeyStatRow[];
+  channel_share?: MonitoringAnalyticsChannelShareRow[];
+  model_stats?: MonitoringAnalyticsModelStat[];
 }
 
 export interface MonitoringAnalyticsTaskBucketRow {
@@ -563,6 +687,8 @@ export interface MonitoringAnalyticsTaskBucketRow {
   input_tokens: number;
   output_tokens: number;
   cached_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
   total_tokens: number;
   average_latency_ms: number | null;
   max_latency_ms: number | null;
@@ -572,10 +698,17 @@ export interface MonitoringAnalyticsRecentFailure {
   timestamp_ms: number;
   model: string;
   api_key_hash: string;
+  source?: string;
   source_hash: string;
   auth_index: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_provider_snapshot?: string;
+  auth_project_id_snapshot?: string;
   endpoint: string;
   duration_ms: number | null;
+  fail_status_code?: number | null;
+  fail_summary?: string;
 }
 
 export interface MonitoringAnalyticsEventRow {
@@ -594,13 +727,19 @@ export interface MonitoringAnalyticsEventRow {
   auth_provider_snapshot: string;
   auth_project_id_snapshot?: string;
   resolved_model?: string;
+  reasoning_effort?: string;
   input_tokens: number;
   output_tokens: number;
   cached_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
   reasoning_tokens: number;
   total_tokens: number;
   latency_ms: number | null;
+  ttft_ms?: number | null;
   failed: boolean;
+  fail_status_code?: number | null;
+  fail_summary?: string;
 }
 
 export interface MonitoringAnalyticsEventsResponse {
@@ -619,6 +758,9 @@ export interface MonitoringAnalyticsResponse {
   model_stats?: MonitoringAnalyticsModelStat[];
   channel_share?: MonitoringAnalyticsChannelShareRow[];
   failure_sources?: MonitoringAnalyticsFailureSourceRow[];
+  account_stats?: MonitoringAnalyticsAccountStatRow[];
+  api_key_stats?: MonitoringAnalyticsApiKeyStatRow[];
+  filter_options?: MonitoringAnalyticsFilterOptions;
   task_buckets?: MonitoringAnalyticsTaskBucketRow[];
   recent_failures?: MonitoringAnalyticsRecentFailure[];
   events?: MonitoringAnalyticsEventsResponse;
@@ -852,6 +994,25 @@ export const usageServiceApi = {
       const response = await axios.post<CodexInspectionRunDetail>(
         buildUrl(base, '/v0/management/codex-inspection/run'),
         undefined,
+        {
+          timeout: CODEX_INSPECTION_RUN_TIMEOUT_MS,
+          headers: authHeaders(managementKey),
+        }
+      );
+      return response.data;
+    });
+  },
+
+  executeCodexInspectionActions: async (
+    base: string,
+    managementKey: string | undefined,
+    runId: number,
+    resultIds: number[]
+  ): Promise<CodexInspectionActionsResponse> => {
+    return withUsageServiceError(async () => {
+      const response = await axios.post<CodexInspectionActionsResponse>(
+        buildUrl(base, `/v0/management/codex-inspection/runs/${runId}/actions`),
+        { resultIds },
         {
           timeout: CODEX_INSPECTION_RUN_TIMEOUT_MS,
           headers: authHeaders(managementKey),

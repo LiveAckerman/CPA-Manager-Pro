@@ -18,7 +18,7 @@ CPA 自 v6.10.0 起不再内置用量统计。当前方案通过常驻 Manager S
 CPA Manager Pro 是 CPA-Manager 的推荐后续版本。它把 CPA 管理面板与可 Docker 部署的 Manager Server 组合在一起，提供管理员密钥保护的完整面板模式、加密保存 CPA Management Key、服务端统计分析、模型价格、API Key 别名、仪表盘卡片和 Codex 账号巡检。
 
 - **CPA 主项目**: https://github.com/router-for-me/CLIProxyAPI
-- **推荐 CPA 版本**: >= v7.1.0
+- **推荐 CPA 版本**: >= v7.1.18
 - **HTTP 用量队列最低 CPA 版本**: >= v6.10.8
 
 ## 面板预览
@@ -55,7 +55,8 @@ CPA Manager Pro 是 CPA-Manager 的推荐后续版本。它把 CPA 管理面板�
 - CPA 必须启用 Management，因为用量队列与 `/v0/management` 使用相同的可用性条件和 Management Key。
 - 使用请求监控时，CPA 必须启用用量发布：配置 `usage-statistics-enabled: true`，或通过 `PUT /usage-statistics-enabled` 提交 `{ "value": true }`。CPA Manager Pro 初始化或保存启用请求监控时会自动打开该开关。
 - 关闭 CPAM 请求监控只会停止 Manager Server 采集器，不会自动关闭 CPA 用量发布或清空 CPA 用量队列。如果 CPA 用量发布仍开启，在队列保留时间内再次启用请求监控，可能会采集到关闭采集器期间保留的数据。
-- 推荐使用 CPA `v7.1.0+` 以匹配当前面板能力；CPA `v6.10.8+` 已提供 HTTP 用量队列接口 `/v0/management/usage-queue`，可通过普通 HTTP 反代访问。
+- 推荐使用 CPA `v7.1.18+` 以匹配当前面板能力，并获取新版监控视图所需的完整 Redis usage 元数据：请求侧 `reasoning_effort`、`tokens.cache_read_tokens`、`tokens.cache_creation_tokens`、`fail.status_code` 和 `fail.body`。CPA `v6.10.8+` 已提供 HTTP 用量队列接口 `/v0/management/usage-queue`，可通过普通 HTTP 反代访问。旧版兼容 CPA 不会输出这些可选字段；CPA Manager Plus 仍会兼容导入和采集旧事件，缺失的字符串字段显示为空/未知，缺失的数值字段按 `0` 处理。
+- `reasoning_effort` 是请求侧推理强度配置，不是实际推理 token 消耗；实际消耗仍以 `tokens.reasoning_tokens` 为准。
 - Manager Server 的 `auto` 模式会先尝试 RESP Pub/Sub（`subscribe`），再尝试 HTTP 用量队列，最后回退到旧版 RESP 弹出模式。RESP 传输监听在 CPA API 端口，通常是 `8317`，不能通过普通 HTTP 反代转发。
 - CPA 在内存中保留队列项的时间由 `redis-usage-queue-retention-seconds` 控制，默认 `60` 秒，最大 `3600` 秒。Manager Server 应保持常驻运行。
 - Manager Server 的 `pollIntervalMs` 必须小于等于 CPA 队列保留时间换算后的毫秒值；否则服务会拒绝保存，避免空闲轮询过慢导致队列项过期。
@@ -367,6 +368,8 @@ docker compose -f docker-compose.manager.yml up --build
 完整 Docker setup 后，`/status`、用量、模型价格和 `/v0/management/*` 反代接口需要使用管理员密钥作为 Bearer token。CPA 控制面板外置模式下，这些 Manager Server 接口兼容 CPA Management Key，以保持 CPA 面板方案不需要额外登录 Manager Server。
 
 用量导入支持两类文件：Manager Server 导出的 JSONL/NDJSON 事件文件，以及旧版 CPA `/usage/export` 生成的 JSON 快照。旧版 JSON 只有在 `usage.apis.*.models.*.details[]` 明细存在时才能转换为事件；如果文件只包含聚合总量，Manager Server 会拒绝导入，因为无法还原请求级明细。旧版导入属于迁移/恢复能力，不是与 Manager Server 新采集数据完全等价的历史延续：旧文件可能缺少 `api_key_hash`、渠道、请求 ID、method/path、延迟、缓存 token 或失败原因等元数据，账号匹配、API Key 维度分析和明细精度可能低于新采集数据。导入旧文件会影响总量、趋势图和账号/Key 拆解，准确性敏感时建议先导入测试库或备份库验证。
+
+CPA usage 事件中的失败正文按敏感诊断信息处理。Manager Server 只在本地 SQLite 数据库中保留原始 `fail_body` 用于内部排查；普通 API、兼容用量 payload 和 JSONL 导出只暴露经过脱敏与截断的 `fail_summary`。JSONL 导出会主动省略 `raw_json` 和原始 `fail_body`；导入仍兼容旧导出文件和历史快照。
 
 ## 功能概览
 

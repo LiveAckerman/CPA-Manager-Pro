@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type Event struct {
@@ -34,25 +35,38 @@ type Event struct {
 	AuthProviderSnapshot  string `json:"auth_provider_snapshot,omitempty"`
 	AuthProjectIDSnapshot string `json:"auth_project_id_snapshot,omitempty"`
 	AuthSnapshotAtMS      int64  `json:"auth_snapshot_at_ms,omitempty"`
-	InputTokens           int64  `json:"input_tokens"`
-	OutputTokens          int64  `json:"output_tokens"`
-	ReasoningTokens       int64  `json:"reasoning_tokens"`
-	CachedTokens          int64  `json:"cached_tokens"`
-	CacheTokens           int64  `json:"cache_tokens"`
-	TotalTokens           int64  `json:"total_tokens"`
-	LatencyMS             *int64 `json:"latency_ms,omitempty"`
-	Failed                bool   `json:"failed"`
-	RawJSON               string `json:"raw_json,omitempty"`
-	CreatedAtMS           int64  `json:"created_at_ms"`
+	// ReasoningEffort is the request-side effort setting added by CPA v7.1.18+.
+	// It is not the same as response-side tokens.reasoning_tokens usage.
+	ReasoningEffort     string `json:"reasoning_effort,omitempty"`
+	InputTokens         int64  `json:"input_tokens"`
+	OutputTokens        int64  `json:"output_tokens"`
+	ReasoningTokens     int64  `json:"reasoning_tokens"`
+	CachedTokens        int64  `json:"cached_tokens"`
+	CacheTokens         int64  `json:"cache_tokens"`
+	CacheReadTokens     int64  `json:"cache_read_tokens"`
+	CacheCreationTokens int64  `json:"cache_creation_tokens"`
+	TotalTokens         int64  `json:"total_tokens"`
+	LatencyMS           *int64 `json:"latency_ms,omitempty"`
+	TTFTMS              *int64 `json:"ttft_ms,omitempty"`
+	Failed              bool   `json:"failed"`
+	FailStatusCode      int    `json:"fail_status_code,omitempty"`
+	FailSummary         string `json:"fail_summary,omitempty"`
+	// FailBody is retained only in the local DB as a sensitive internal field.
+	// Public APIs, compatible payloads, and exports must use FailSummary instead.
+	FailBody    string `json:"-"`
+	RawJSON     string `json:"raw_json,omitempty"`
+	CreatedAtMS int64  `json:"created_at_ms"`
 }
 
 type Tokens struct {
-	InputTokens     int64 `json:"input_tokens"`
-	OutputTokens    int64 `json:"output_tokens"`
-	ReasoningTokens int64 `json:"reasoning_tokens"`
-	CachedTokens    int64 `json:"cached_tokens"`
-	CacheTokens     int64 `json:"cache_tokens"`
-	TotalTokens     int64 `json:"total_tokens"`
+	InputTokens         int64 `json:"input_tokens"`
+	OutputTokens        int64 `json:"output_tokens"`
+	ReasoningTokens     int64 `json:"reasoning_tokens"`
+	CachedTokens        int64 `json:"cached_tokens"`
+	CacheTokens         int64 `json:"cache_tokens"`
+	CacheReadTokens     int64 `json:"cache_read_tokens"`
+	CacheCreationTokens int64 `json:"cache_creation_tokens"`
+	TotalTokens         int64 `json:"total_tokens"`
 }
 
 type Detail struct {
@@ -67,9 +81,13 @@ type Detail struct {
 	AuthProjectIDSnapshot string `json:"auth_project_id_snapshot,omitempty"`
 	AuthSnapshotAtMS      int64  `json:"auth_snapshot_at_ms,omitempty"`
 	LatencyMS             *int64 `json:"latency_ms,omitempty"`
+	TTFTMS                *int64 `json:"ttft_ms,omitempty"`
 	ResolvedModel         string `json:"resolved_model,omitempty"`
+	ReasoningEffort       string `json:"reasoning_effort,omitempty"`
 	Tokens                Tokens `json:"tokens"`
 	Failed                bool   `json:"failed"`
+	FailStatusCode        int    `json:"fail_status_code,omitempty"`
+	FailSummary           string `json:"fail_summary,omitempty"`
 }
 
 type ModelAggregate struct {
@@ -88,7 +106,44 @@ type Payload struct {
 	APIs          map[string]*APIAggregate `json:"apis"`
 }
 
-var endpointPattern = regexp.MustCompile(`^(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+(\S+)`)
+const maxFailSummaryBytes = 4096
+
+var (
+	endpointPattern          = regexp.MustCompile(`^(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+(\S+)`)
+	authorizationHeaderRegex = regexp.MustCompile(`(?i)\b(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s,"'{}]+`)
+	bearerTokenRegex         = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}`)
+	apiKeyTokenRegex         = regexp.MustCompile(`(sk-proj-[A-Za-z0-9-_]{6,}|sk-ant-[A-Za-z0-9-_]{6,}|sk-[A-Za-z0-9-_]{6,}|sess-[A-Za-z0-9-_]{6,}|ghp_[A-Za-z0-9]{6,}|github_pat_[A-Za-z0-9_]{20,}|AIza[0-9A-Za-z-_]{8,}|hf_[A-Za-z0-9]{6,}|pk_[A-Za-z0-9]{6,}|rk_[A-Za-z0-9]{6,})`)
+	tokenFieldRegex          = regexp.MustCompile(`(?i)\b(access_token|refresh_token|id_token)\b(\s*["']?\s*[:=]\s*["']?)[^"',\s&}]+`)
+	apiKeyFieldRegex         = regexp.MustCompile(`(?i)\b(api[-_ ]?key|x-api-key)\b(\s*["']?\s*[:=]\s*["']?)[^"',\s&}]+`)
+	cookieJSONFieldRegex     = regexp.MustCompile(`(?i)("?(?:cookie|set-cookie)"?\s*:\s*")[^"]*(")`)
+	cookieHeaderRegex        = regexp.MustCompile(`(?i)\b(cookie|set-cookie)\s*:\s*[^,\r\n"}]+`)
+	emailRegex               = regexp.MustCompile(`([A-Za-z0-9._%+\-])([A-Za-z0-9._%+\-]*)(@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})`)
+)
+
+// CompatibleCachedTokens returns the legacy cached_tokens value after removing
+// fine-grained cache dimensions. CPA's Claude parser mirrors cache read/create
+// values into cached_tokens for older consumers, so public payloads must not
+// expose both as independently addable token buckets.
+func CompatibleCachedTokens(cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens int64) int64 {
+	cached := cachedTokens
+	if cacheTokens > cached {
+		cached = cacheTokens
+	}
+	if cached <= 0 {
+		return 0
+	}
+	fineGrained := int64(0)
+	if cacheReadTokens > 0 {
+		fineGrained += cacheReadTokens
+	}
+	if cacheCreationTokens > 0 {
+		fineGrained += cacheCreationTokens
+	}
+	if cached <= fineGrained {
+		return 0
+	}
+	return cached - fineGrained
+}
 
 func NormalizeRaw(raw []byte) (Event, error) {
 	var payload any
@@ -99,9 +154,6 @@ func NormalizeRaw(raw []byte) (Event, error) {
 	if !ok {
 		return Event{}, fmt.Errorf("usage payload is not a JSON object")
 	}
-
-	redacted := redactValue(payload)
-	redactedJSON, _ := json.Marshal(redacted)
 
 	timestampMS, timestamp := readTimestamp(record)
 	method := strings.ToUpper(readString(record, "method", "http_method", "httpMethod"))
@@ -124,13 +176,20 @@ func NormalizeRaw(raw []byte) (Event, error) {
 		endpoint = "-"
 	}
 
-	inputTokens, outputTokens, reasoningTokens, cachedTokens, cacheTokens, totalTokens := readTokenFields(record)
+	inputTokens, outputTokens, reasoningTokens, cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens, totalTokens := readTokenFields(record)
 	if totalTokens <= 0 {
-		totalTokens = inputTokens + outputTokens + reasoningTokens + maxInt64(cachedTokens, cacheTokens)
+		totalTokens = inputTokens + outputTokens + reasoningTokens +
+			CompatibleCachedTokens(cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens) +
+			maxInt64(cacheReadTokens, 0) + maxInt64(cacheCreationTokens, 0)
 	}
 
 	latencyMS := readOptionalInt(record, "latency_ms", "latencyMs", "duration_ms", "durationMs", "elapsed_ms", "elapsedMs")
+	ttftMS := readOptionalInt(record, "ttft_ms", "ttftMs", "time_to_first_token_ms", "timeToFirstTokenMs")
 	failed := readFailed(record)
+	failStatusCode, failBody := readFailFields(record)
+	failSummary := FailSummaryFromBody(failBody)
+	redacted := redactValue(payload)
+	redactedJSON, _ := json.Marshal(redacted)
 	sourceRaw := readString(record, "source", "api_key", "apiKey", "key", "account", "email")
 	source := maskSource(sourceRaw)
 	apiKey := readString(record, "api_key", "apiKey", "key")
@@ -164,14 +223,21 @@ func NormalizeRaw(raw []byte) (Event, error) {
 		AuthProviderSnapshot:  readString(record, "auth_provider_snapshot", "authProviderSnapshot"),
 		AuthProjectIDSnapshot: readString(record, "auth_project_id_snapshot", "authProjectIdSnapshot", "project_id", "projectId"),
 		AuthSnapshotAtMS:      readInt(record, "auth_snapshot_at_ms", "authSnapshotAtMs"),
+		ReasoningEffort:       readString(record, "reasoning_effort", "reasoningEffort"),
 		InputTokens:           inputTokens,
 		OutputTokens:          outputTokens,
 		ReasoningTokens:       reasoningTokens,
 		CachedTokens:          cachedTokens,
 		CacheTokens:           cacheTokens,
+		CacheReadTokens:       cacheReadTokens,
+		CacheCreationTokens:   cacheCreationTokens,
 		TotalTokens:           totalTokens,
 		LatencyMS:             latencyMS,
+		TTFTMS:                ttftMS,
 		Failed:                failed,
+		FailStatusCode:        int(failStatusCode),
+		FailSummary:           failSummary,
+		FailBody:              failBody,
 		RawJSON:               string(redactedJSON),
 		CreatedAtMS:           time.Now().UnixMilli(),
 	}
@@ -211,6 +277,12 @@ func BuildPayload(events []Event) Payload {
 			modelEntry = &ModelAggregate{}
 			apiEntry.Models[model] = modelEntry
 		}
+		compatCachedTokens := CompatibleCachedTokens(
+			event.CachedTokens,
+			event.CacheTokens,
+			event.CacheReadTokens,
+			event.CacheCreationTokens,
+		)
 		modelEntry.Details = append(modelEntry.Details, Detail{
 			Timestamp:             event.Timestamp,
 			Source:                event.Source,
@@ -223,15 +295,21 @@ func BuildPayload(events []Event) Payload {
 			AuthProjectIDSnapshot: event.AuthProjectIDSnapshot,
 			AuthSnapshotAtMS:      event.AuthSnapshotAtMS,
 			LatencyMS:             event.LatencyMS,
+			TTFTMS:                event.TTFTMS,
 			ResolvedModel:         event.ResolvedModel,
+			ReasoningEffort:       event.ReasoningEffort,
 			Failed:                event.Failed,
+			FailStatusCode:        event.FailStatusCode,
+			FailSummary:           event.FailSummary,
 			Tokens: Tokens{
-				InputTokens:     event.InputTokens,
-				OutputTokens:    event.OutputTokens,
-				ReasoningTokens: event.ReasoningTokens,
-				CachedTokens:    event.CachedTokens,
-				CacheTokens:     event.CacheTokens,
-				TotalTokens:     event.TotalTokens,
+				InputTokens:         event.InputTokens,
+				OutputTokens:        event.OutputTokens,
+				ReasoningTokens:     event.ReasoningTokens,
+				CachedTokens:        compatCachedTokens,
+				CacheTokens:         compatCachedTokens,
+				CacheReadTokens:     event.CacheReadTokens,
+				CacheCreationTokens: event.CacheCreationTokens,
+				TotalTokens:         event.TotalTokens,
 			},
 		})
 	}
@@ -268,7 +346,7 @@ func readTimestamp(record map[string]any) (int64, string) {
 	return now.UnixMilli(), now.UTC().Format(time.RFC3339Nano)
 }
 
-func readTokenFields(record map[string]any) (int64, int64, int64, int64, int64, int64) {
+func readTokenFields(record map[string]any) (int64, int64, int64, int64, int64, int64, int64, int64) {
 	tokens := map[string]any{}
 	if nested, ok := first(record, "tokens", "usage").(map[string]any); ok {
 		tokens = nested
@@ -293,11 +371,19 @@ func readTokenFields(record map[string]any) (int64, int64, int64, int64, int64, 
 	if cache == 0 {
 		cache = readInt(record, "cache_tokens", "cacheTokens")
 	}
+	cacheRead := readIntFrom(tokens, "cache_read_tokens", "cacheReadTokens")
+	if cacheRead == 0 {
+		cacheRead = readInt(record, "cache_read_tokens", "cacheReadTokens")
+	}
+	cacheCreation := readIntFrom(tokens, "cache_creation_tokens", "cacheCreationTokens")
+	if cacheCreation == 0 {
+		cacheCreation = readInt(record, "cache_creation_tokens", "cacheCreationTokens")
+	}
 	total := readIntFrom(tokens, "total_tokens", "totalTokens", "total")
 	if total == 0 {
 		total = readInt(record, "total_tokens", "totalTokens", "total")
 	}
-	return input, output, reasoning, cached, cache, total
+	return input, output, reasoning, cached, cache, cacheRead, cacheCreation, total
 }
 
 func readFailed(record map[string]any) bool {
@@ -312,6 +398,22 @@ func readFailed(record map[string]any) bool {
 		return true
 	}
 	return first(record, "error", "error_message", "errorMessage") != nil
+}
+
+func readFailFields(record map[string]any) (int64, string) {
+	fail := map[string]any{}
+	if nested, ok := first(record, "fail").(map[string]any); ok {
+		fail = nested
+	}
+	statusCode := readIntFrom(fail, "status_code", "statusCode")
+	if statusCode == 0 {
+		statusCode = readInt(record, "fail_status_code", "failStatusCode")
+	}
+	body := readString(fail, "body")
+	if body == "" {
+		body = readString(record, "fail_body", "failBody")
+	}
+	return statusCode, body
 }
 
 func readOptionalInt(record map[string]any, keys ...string) *int64 {
@@ -440,22 +542,80 @@ func looksSecret(value string) bool {
 	return strings.HasPrefix(value, "sk-") || strings.HasPrefix(value, "AIza") || len(value) >= 32
 }
 
+func FailSummaryFromBody(body string) string {
+	summary := strings.TrimSpace(body)
+	if summary == "" {
+		return ""
+	}
+	summary = authorizationHeaderRegex.ReplaceAllString(summary, `${1}[redacted]`)
+	summary = bearerTokenRegex.ReplaceAllString(summary, `Bearer [redacted]`)
+	summary = tokenFieldRegex.ReplaceAllString(summary, `${1}${2}[redacted]`)
+	summary = apiKeyFieldRegex.ReplaceAllString(summary, `${1}${2}[redacted]`)
+	summary = apiKeyTokenRegex.ReplaceAllString(summary, `[redacted]`)
+	summary = cookieJSONFieldRegex.ReplaceAllString(summary, `${1}[redacted]${2}`)
+	summary = cookieHeaderRegex.ReplaceAllString(summary, `${1}: [redacted]`)
+	summary = emailRegex.ReplaceAllString(summary, `${1}***${3}`)
+	return truncateUTF8Bytes(strings.TrimSpace(summary), maxFailSummaryBytes)
+}
+
+func SafeRawJSON(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(trimmed), &payload); err == nil {
+		redacted, err := json.Marshal(redactValue(payload))
+		if err == nil {
+			return string(redacted)
+		}
+	}
+	return FailSummaryFromBody(trimmed)
+}
+
+func truncateUTF8Bytes(value string, maxBytes int) string {
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		return value
+	}
+	var builder strings.Builder
+	for _, r := range value {
+		size := utf8.RuneLen(r)
+		if size < 0 {
+			size = len(string(r))
+		}
+		if builder.Len()+size > maxBytes {
+			break
+		}
+		builder.WriteRune(r)
+	}
+	return strings.TrimSpace(builder.String()) + "..."
+}
+
 func redactValue(value any) any {
+	return redactValueWithParent("", value)
+}
+
+func redactValueWithParent(parentKey string, value any) any {
 	switch item := value.(type) {
 	case map[string]any:
 		result := make(map[string]any, len(item))
 		for key, child := range item {
+			normalizedKey := normalizeSecretKey(key)
 			if isSecretKey(key) {
 				result[key] = "[redacted]"
 				continue
 			}
-			result[key] = redactValue(child)
+			if normalizedKey == "fail_body" || (parentKey == "fail" && normalizedKey == "body") {
+				result[key] = FailSummaryFromBody(stringValue(child))
+				continue
+			}
+			result[key] = redactValueWithParent(normalizedKey, child)
 		}
 		return result
 	case []any:
 		result := make([]any, 0, len(item))
 		for _, child := range item {
-			result = append(result, redactValue(child))
+			result = append(result, redactValueWithParent(parentKey, child))
 		}
 		return result
 	default:
@@ -464,12 +624,34 @@ func redactValue(value any) any {
 }
 
 func isSecretKey(key string) bool {
-	normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+	normalized := normalizeSecretKey(key)
 	return normalized == "api_key" ||
 		normalized == "apikey" ||
 		normalized == "authorization" ||
+		normalized == "cookie" ||
+		normalized == "set_cookie" ||
 		normalized == "access_token" ||
 		normalized == "refresh_token" ||
+		normalized == "id_token" ||
 		normalized == "token" ||
 		strings.Contains(normalized, "secret")
+}
+
+func normalizeSecretKey(key string) string {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "-", "_"))
+	normalized = strings.ReplaceAll(normalized, " ", "_")
+	return normalized
+}
+
+func stringValue(raw any) string {
+	switch value := raw.(type) {
+	case string:
+		return value
+	case json.Number:
+		return value.String()
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(value)
+	}
 }

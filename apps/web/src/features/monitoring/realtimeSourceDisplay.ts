@@ -1,10 +1,13 @@
 import type { TFunction } from 'i18next';
 import type { MonitoringEventRow } from '@/features/monitoring/hooks/useMonitoringData';
+import { isGenericMonitoringProviderLabel } from '@/features/monitoring/model/sourceDisplay';
 
 const hasReadableRealtimeValue = (value: string | null | undefined) => {
   const trimmed = String(value || '').trim();
   return Boolean(trimmed) && trimmed !== '-';
 };
+
+const firstReadable = (...values: string[]) => values.find(hasReadableRealtimeValue)?.trim() || '';
 
 export const buildRealtimeSourceDisplay = (
   row: Pick<
@@ -26,7 +29,16 @@ export const buildRealtimeSourceDisplay = (
     .find(hasReadableRealtimeValue)
     ?.trim();
   const source = hasReadableRealtimeValue(row.sourceMasked) ? row.sourceMasked.trim() : '';
-  const primary = channel || provider || host || account || source || '-';
+  const primary =
+    firstReadable(
+      channel && !isGenericMonitoringProviderLabel(channel) ? channel : '',
+      host,
+      source,
+      provider && !isGenericMonitoringProviderLabel(provider) ? provider : '',
+      account || '',
+      channel,
+      provider
+    ) || '-';
   const metaCandidate = [
     { value: provider, label: t('monitoring.filter_provider') },
     { value: host, label: t('monitoring.column_host') },

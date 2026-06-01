@@ -1,6 +1,6 @@
 import type { GeminiKeyConfig, OpenAIProviderConfig, ProviderKeyConfig } from '@/types';
 import type { CredentialInfo, SourceInfo } from '@/types/sourceInfo';
-import { buildCandidateUsageSourceIds, normalizeAuthIndex } from '@/utils/usage';
+import { buildCandidateUsageSourceIds, normalizeAuthIndex, normalizeUsageSourceId } from '@/utils/usage';
 
 export interface SourceInfoMapInput {
   geminiApiKeys?: GeminiKeyConfig[];
@@ -17,7 +17,7 @@ export interface SourceInfoMap {
   bySource: Map<string, SourceInfoEntry | null>;
 }
 
-const buildProviderIdentityKey = (type: string, index: number) => `${type}:${index}`;
+const buildProviderIdentityKey = (type: string, index: number | string) => `${type}:${index}`;
 
 const registerIdentity = (
   map: Map<string, SourceInfoEntry | null>,
@@ -39,6 +39,84 @@ const registerIdentity = (
 const formatRawSourceDisplayName = (source: string) => {
   if (!source) return '-';
   return source.startsWith('t:') ? source.slice(2) : source;
+};
+
+const extractHost = (baseUrl: string | undefined) => {
+  const trimmed = String(baseUrl || '').trim();
+  if (!trimmed) return '';
+
+  try {
+    return new URL(trimmed).host || trimmed;
+  } catch {
+    return trimmed.replace(/^https?:\/\//i, '').split('/')[0] || trimmed;
+  }
+};
+
+const buildProviderDisplayNames = (
+  items: Array<{ prefix?: string; name?: string; baseUrl?: string }>,
+  fallbackLabel: string
+) => {
+  const hostCounts = new Map<string, number>();
+
+  items.forEach((item) => {
+    if (item.prefix?.trim()) return;
+    if (item.name?.trim()) return;
+    const host = extractHost(item.baseUrl);
+    if (!host) return;
+    hostCounts.set(host, (hostCounts.get(host) || 0) + 1);
+  });
+
+  const hostOrdinals = new Map<string, number>();
+  return items.map((item, index) => {
+    const prefix = item.prefix?.trim();
+    if (prefix) return prefix;
+
+    const name = item.name?.trim();
+    if (name) return name;
+
+    const host = extractHost(item.baseUrl);
+    if (!host) return `${fallbackLabel} #${index + 1}`;
+    if ((hostCounts.get(host) || 0) <= 1) return host;
+
+    const ordinal = (hostOrdinals.get(host) || 0) + 1;
+    hostOrdinals.set(host, ordinal);
+    return `${host} #${ordinal}`;
+  });
+};
+
+const disambiguateDuplicateNames = (names: string[]) => {
+  const counts = new Map<string, number>();
+  names.forEach((name) => {
+    counts.set(name, (counts.get(name) || 0) + 1);
+  });
+
+  const ordinals = new Map<string, number>();
+  return names.map((name) => {
+    if ((counts.get(name) || 0) <= 1) return name;
+    const ordinal = (ordinals.get(name) || 0) + 1;
+    ordinals.set(name, ordinal);
+    return `${name} #${ordinal}`;
+  });
+};
+
+const buildOpenAIKeyDisplayNameMap = (providers: OpenAIProviderConfig[]) => {
+  const entries: Array<{ key: string; name: string }> = [];
+
+  providers.forEach((provider, providerIndex) => {
+    (provider.apiKeyEntries || []).forEach((_entry, entryIndex) => {
+      entries.push({
+        key: `${providerIndex}:${entryIndex}`,
+        name:
+          provider.prefix?.trim() ||
+          provider.name?.trim() ||
+          extractHost(provider.baseUrl) ||
+          `OpenAI #${providerIndex + 1}`,
+      });
+    });
+  });
+
+  const displayNames = disambiguateDuplicateNames(entries.map((entry) => entry.name));
+  return new Map(entries.map((entry, index) => [entry.key, displayNames[index] || entry.name]));
 };
 
 export function buildSourceInfoMap(input: SourceInfoMapInput): SourceInfoMap {
@@ -71,10 +149,11 @@ export function buildSourceInfoMap(input: SourceInfoMapInput): SourceInfoMap {
   ];
 
   providers.forEach(({ items, type, label }) => {
+    const displayNames = buildProviderDisplayNames(items, label);
     items.forEach((item, index) => {
       registerProvider(
         {
-          displayName: item.prefix?.trim() || `${label} #${index + 1}`,
+          displayName: displayNames[index] || `${label} #${index + 1}`,
           type,
           identityKey: buildProviderIdentityKey(type, index),
         },
@@ -84,25 +163,42 @@ export function buildSourceInfoMap(input: SourceInfoMapInput): SourceInfoMap {
     });
   });
 
-  (input.openaiCompatibility || []).forEach((provider, providerIndex) => {
-    const candidates = new Set<string>();
-    const authIndices: Array<unknown> = [provider.authIndex];
+  const openaiProviders = input.openaiCompatibility || [];
+  const openaiProviderDisplayNames = buildProviderDisplayNames(openaiProviders, 'OpenAI');
+  const openaiKeyDisplayNames = buildOpenAIKeyDisplayNameMap(openaiProviders);
 
-    buildCandidateUsageSourceIds({ prefix: provider.prefix }).forEach((id) => candidates.add(id));
-    (provider.apiKeyEntries || []).forEach((entry) => {
-      authIndices.push(entry.authIndex);
-      buildCandidateUsageSourceIds({ apiKey: entry.apiKey }).forEach((id) => candidates.add(id));
-    });
+  openaiProviders.forEach((provider, providerIndex) => {
+    const entryAuthIndexKeys = new Set(
+      (provider.apiKeyEntries || [])
+        .map((entry) => normalizeAuthIndex(entry.authIndex))
+        .filter(Boolean)
+    );
+    const providerAuthIndex = normalizeAuthIndex(provider.authIndex);
+    const providerEntry = {
+      displayName: openaiProviderDisplayNames[providerIndex] || `OpenAI #${providerIndex + 1}`,
+      type: 'openai',
+      identityKey: buildProviderIdentityKey('openai', providerIndex),
+    };
 
     registerProvider(
-      {
-        displayName: provider.prefix?.trim() || provider.name || `OpenAI #${providerIndex + 1}`,
-        type: 'openai',
-        identityKey: buildProviderIdentityKey('openai', providerIndex),
-      },
-      authIndices,
-      candidates
+      providerEntry,
+      providerAuthIndex && !entryAuthIndexKeys.has(providerAuthIndex) ? [providerAuthIndex] : [],
+      buildCandidateUsageSourceIds({ prefix: provider.prefix })
     );
+
+    (provider.apiKeyEntries || []).forEach((entry, entryIndex) => {
+      registerProvider(
+        {
+          displayName:
+            openaiKeyDisplayNames.get(`${providerIndex}:${entryIndex}`) ||
+            providerEntry.displayName,
+          type: 'openai',
+          identityKey: buildProviderIdentityKey('openai', `${providerIndex}:${entryIndex}`),
+        },
+        [entry.authIndex],
+        buildCandidateUsageSourceIds({ apiKey: entry.apiKey })
+      );
+    });
   });
 
   return { byAuthIndex, bySource };
@@ -114,7 +210,7 @@ export function resolveSourceDisplay(
   sourceInfoMap: SourceInfoMap,
   authFileMap: Map<string, CredentialInfo>
 ): SourceInfo {
-  const source = sourceRaw.trim();
+  const source = normalizeUsageSourceId(sourceRaw);
   const authIndexKey = normalizeAuthIndex(authIndex);
 
   if (authIndexKey) {

@@ -1,28 +1,49 @@
 import { Link } from 'react-router-dom';
+import type { ComponentType } from 'react';
 import type { TFunction } from 'i18next';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import {
+  IconChartLine,
+  IconCheck,
   IconExternalLink,
-  IconSettings,
+  IconInbox,
+  IconRefreshCw,
+  IconShield,
+  IconTrash2,
+  type IconProps,
 } from '@/components/ui/icons';
+import { type CodexInspectionProgressSnapshot } from '@/features/monitoring/codexInspection';
+import { CodexInspectionConfigOverview } from '@/features/monitoring/components/CodexInspectionConfigOverview';
 import {
-  type CodexInspectionConfigurableSettings,
-  type CodexInspectionProgressSnapshot,
-} from '@/features/monitoring/codexInspection';
-import {
+  type ConfigOverviewItem,
   type RunStatus,
   type StatusTone,
   type SummaryCard,
 } from '@/features/monitoring/model/codexInspectionPresentation';
 import styles from '../CodexInspectionPage.module.scss';
 
+const summaryIconMap: Record<NonNullable<SummaryCard['icon']>, ComponentType<IconProps>> = {
+  probe: IconInbox,
+  sampled: IconChartLine,
+  delete: IconTrash2,
+  disable: IconShield,
+  enable: IconCheck,
+  reauth: IconRefreshCw,
+};
+
+const summaryAccentClassMap: Record<NonNullable<SummaryCard['accent']>, string> = {
+  blue: styles.summaryAccentBlue,
+  cyan: styles.summaryAccentCyan,
+  red: styles.summaryAccentRed,
+  amber: styles.summaryAccentAmber,
+  green: styles.summaryAccentGreen,
+  violet: styles.summaryAccentViolet,
+};
+
 type CodexInspectionStatusPanelProps = {
-  inspectionSettings: CodexInspectionConfigurableSettings;
   statusTone: StatusTone;
   statusLabel: string;
-  executionModeLabel: string;
-  autoActionModeLabel: string;
   lastFinishedLabel: string | null;
   pendingActionCount: number;
   summaryCards: SummaryCard[];
@@ -34,19 +55,19 @@ type CodexInspectionStatusPanelProps = {
   executing: boolean;
   isInspectionInFlight: boolean;
   runDisabled: boolean;
+  configOverviewItems: ConfigOverviewItem[];
+  configOverviewTitle: string;
+  configOverviewEditLabel: string;
   t: TFunction;
-  onOpenSettings: () => void;
+  onEditConfig: (field?: string) => void;
   onRunInspection: () => void;
   onPauseInspection: () => void;
   onStopInspection: () => void;
 };
 
 export function CodexInspectionStatusPanel({
-  inspectionSettings,
   statusTone,
   statusLabel,
-  executionModeLabel,
-  autoActionModeLabel,
   lastFinishedLabel,
   pendingActionCount,
   summaryCards,
@@ -58,8 +79,11 @@ export function CodexInspectionStatusPanel({
   executing,
   isInspectionInFlight,
   runDisabled,
+  configOverviewItems,
+  configOverviewTitle,
+  configOverviewEditLabel,
   t,
-  onOpenSettings,
+  onEditConfig,
   onRunInspection,
   onPauseInspection,
   onStopInspection,
@@ -74,16 +98,6 @@ export function CodexInspectionStatusPanel({
               {statusLabel}
             </span>
             <div className={styles.statusMeta}>
-              <span>{`${t('monitoring.codex_inspection_execution_mode')}: ${executionModeLabel}`}</span>
-              <span>{`${t('monitoring.codex_inspection_target_type')}: ${inspectionSettings.targetType}`}</span>
-              <span>{`${t('monitoring.codex_inspection_threshold')}: ${inspectionSettings.usedPercentThreshold}%`}</span>
-              <span>{`${t('monitoring.codex_inspection_workers')}: ${inspectionSettings.workers}`}</span>
-              <span>{`${t('monitoring.codex_inspection_sample_size')}: ${inspectionSettings.sampleSize || t('common.no')}`}</span>
-              {inspectionSettings.autoActionMode !== 'none' ? (
-                <span className={styles.statusMetaWarn}>
-                  {`${t('monitoring.codex_inspection_settings_auto_action_mode_label')}: ${autoActionModeLabel}`}
-                </span>
-              ) : null}
               {lastFinishedLabel ? <span>{lastFinishedLabel}</span> : null}
               {pendingActionCount > 0 ? (
                 <span
@@ -98,16 +112,6 @@ export function CodexInspectionStatusPanel({
               <IconExternalLink size={14} />
               <span>{t('monitoring.codex_inspection_back')}</span>
             </Link>
-            <button
-              type="button"
-              className={styles.iconButton}
-              onClick={onOpenSettings}
-              disabled={isInspectionInFlight || executing}
-              aria-label={t('monitoring.codex_inspection_settings_button')}
-              title={t('monitoring.codex_inspection_settings_button')}
-            >
-              <IconSettings size={16} />
-            </button>
             <Button
               variant="primary"
               onClick={onRunInspection}
@@ -153,23 +157,49 @@ export function CodexInspectionStatusPanel({
         ) : null}
       </Card>
 
-      <section className={styles.summaryGrid}>
-        {summaryCards.map((card) => (
-          <Card
-            key={card.key}
-            className={[
-              styles.summaryCard,
-              card.tone ? styles[`tone-${card.tone}`] : '',
-            ]
-              .filter(Boolean)
-              .join(' ')}
-          >
-            <span className={styles.summaryLabel}>{card.label}</span>
-            <strong className={styles.summaryValue}>{card.value}</strong>
-            <span className={styles.summaryMeta}>{card.meta}</span>
-          </Card>
-        ))}
-      </section>
+      <CodexInspectionConfigOverview
+        title={configOverviewTitle}
+        editLabel={configOverviewEditLabel}
+        items={configOverviewItems}
+        onEdit={onEditConfig}
+      />
+
+      <div className={styles.summaryShell}>
+        <section className={styles.summaryGrid}>
+          {summaryCards.map((card) => {
+            const SummaryIcon = card.icon ? summaryIconMap[card.icon] : null;
+            return (
+              <div
+                key={card.key}
+                className={[
+                  styles.summaryCard,
+                  card.accent ? summaryAccentClassMap[card.accent] : '',
+                  card.tone ? styles[`tone-${card.tone}`] : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+              >
+                <div className={styles.summaryHeader}>
+                  {SummaryIcon ? (
+                    <span className={styles.summaryIcon}>
+                      <SummaryIcon size={18} />
+                    </span>
+                  ) : null}
+                  <span className={styles.summaryLabel} title={card.label}>
+                    {card.label}
+                  </span>
+                </div>
+                <div className={styles.summaryBody}>
+                  <strong className={styles.summaryValue}>{card.value}</strong>
+                  <span className={styles.summaryMeta} title={card.meta}>
+                    {card.meta}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </section>
+      </div>
     </>
   );
 }

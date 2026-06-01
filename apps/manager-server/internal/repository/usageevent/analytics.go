@@ -7,12 +7,19 @@ import (
 	"strings"
 )
 
+const (
+	compatCachedExpr  = "max(max(cached_tokens, cache_tokens) - max(cache_read_tokens, 0) - max(cache_creation_tokens, 0), 0)"
+	compatCachedFExpr = "max(max(f.cached_tokens, f.cache_tokens) - max(f.cache_read_tokens, 0) - max(f.cache_creation_tokens, 0), 0)"
+)
+
 type AnalyticsFilter struct {
 	FromMS            int64
 	ToMS              int64
 	SearchQuery       string
 	SearchAPIKeyHash  string
 	Models            []string
+	Providers         []string
+	Accounts          []string
 	AuthIndices       []string
 	APIKeyHashes      []string
 	SourceHashes      []string
@@ -36,46 +43,105 @@ type HourlyPoint struct {
 }
 
 type ChannelModelStat struct {
-	AuthIndex    string
-	Model        string
-	BillingModel string
-	Calls        int64
-	SuccessCalls int64
-	FailureCalls int64
-	InputTokens  int64
-	OutputTokens int64
-	CachedTokens int64
-	TotalTokens  int64
-	AvgLatencyMS sql.NullFloat64
+	AuthIndex            string
+	Source               string
+	AccountSnapshot      string
+	AuthLabelSnapshot    string
+	AuthProviderSnapshot string
+	Model                string
+	BillingModel         string
+	Calls                int64
+	SuccessCalls         int64
+	FailureCalls         int64
+	InputTokens          int64
+	OutputTokens         int64
+	CachedTokens         int64
+	CacheReadTokens      int64
+	CacheCreationTokens  int64
+	TotalTokens          int64
+	AvgLatencyMS         sql.NullFloat64
 }
 
 type FailureSourceStat struct {
-	SourceHash   string
-	AuthIndex    string
-	Calls        int64
-	FailureCalls int64
-	LastSeenMS   int64
-	AvgLatencyMS sql.NullFloat64
+	Source               string
+	SourceHash           string
+	AuthIndex            string
+	AccountSnapshot      string
+	AuthLabelSnapshot    string
+	AuthProviderSnapshot string
+	Calls                int64
+	FailureCalls         int64
+	LastSeenMS           int64
+	AvgLatencyMS         sql.NullFloat64
+}
+
+type AccountModelStat struct {
+	AccountSnapshot      string
+	AuthLabelSnapshot    string
+	AuthProviderSnapshot string
+	AuthIndex            string
+	Source               string
+	SourceHash           string
+	Model                string
+	BillingModel         string
+	Calls                int64
+	SuccessCalls         int64
+	FailureCalls         int64
+	InputTokens          int64
+	OutputTokens         int64
+	CachedTokens         int64
+	CacheReadTokens      int64
+	CacheCreationTokens  int64
+	TotalTokens          int64
+	LastSeenMS           int64
+	AvgLatencyMS         sql.NullFloat64
+	LatencySamples       int64
+}
+
+type APIKeyModelStat struct {
+	APIKeyHash           string
+	AccountSnapshot      string
+	AuthLabelSnapshot    string
+	AuthProviderSnapshot string
+	AuthIndex            string
+	Source               string
+	SourceHash           string
+	Model                string
+	BillingModel         string
+	Calls                int64
+	SuccessCalls         int64
+	FailureCalls         int64
+	InputTokens          int64
+	OutputTokens         int64
+	CachedTokens         int64
+	CacheReadTokens      int64
+	CacheCreationTokens  int64
+	TotalTokens          int64
+	LastSeenMS           int64
+	AvgLatencyMS         sql.NullFloat64
+	LatencySamples       int64
 }
 
 type TaskBucket struct {
-	BucketKey    string
-	Total        int64
-	Success      int64
-	Failure      int64
-	FirstMS      int64
-	LastMS       int64
-	Source       string
-	SourceHash   string
-	AuthIndex    string
-	Models       string
-	Endpoints    string
-	InputTokens  int64
-	OutputTokens int64
-	CachedTokens int64
-	TotalTokens  int64
-	AvgLatencyMS sql.NullFloat64
-	MaxLatencyMS sql.NullInt64
+	BucketKey           string
+	Total               int64
+	Success             int64
+	Failure             int64
+	FirstMS             int64
+	LastMS              int64
+	Source              string
+	SourceHash          string
+	AuthIndex           string
+	Models              string
+	Endpoints           string
+	InputTokens         int64
+	OutputTokens        int64
+	CachedTokens        int64
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	TotalTokens         int64
+	AvgLatencyMS        sql.NullFloat64
+	MaxLatencyMS        sql.NullInt64
 }
 
 type EventPageItem struct {
@@ -95,13 +161,19 @@ type EventPageItem struct {
 	AuthLabelSnapshot     string
 	AuthProviderSnapshot  string
 	AuthProjectIDSnapshot string
+	ReasoningEffort       string
 	InputTokens           int64
 	OutputTokens          int64
 	CachedTokens          int64
+	CacheReadTokens       int64
+	CacheCreationTokens   int64
 	ReasoningTokens       int64
 	TotalTokens           int64
 	LatencyMS             sql.NullInt64
+	TTFTMS                sql.NullInt64
 	Failed                bool
+	FailStatusCode        sql.NullInt64
+	FailSummary           string
 }
 
 type EventsPage struct {
@@ -119,7 +191,9 @@ func (r *repository) AggregateWithFilter(ctx context.Context, filter AnalyticsFi
 	coalesce(sum(input_tokens), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(reasoning_tokens), 0),
-	coalesce(sum(case when cached_tokens > cache_tokens then cached_tokens else cache_tokens end), 0),
+	coalesce(sum(`+compatCachedExpr+`), 0),
+	coalesce(sum(cache_read_tokens), 0),
+	coalesce(sum(cache_creation_tokens), 0),
 	coalesce(sum(total_tokens), 0),
 	avg(nullif(latency_ms, 0)),
 	coalesce(sum(case when total_tokens = 0 and failed = 0 then 1 else 0 end), 0)
@@ -135,6 +209,8 @@ from usage_events `+where, args...)
 		&agg.OutputTokens,
 		&agg.ReasoningTokens,
 		&agg.CachedTokens,
+		&agg.CacheReadTokens,
+		&agg.CacheCreationTokens,
 		&agg.TotalTokens,
 		&agg.AvgLatencyMS,
 		&agg.ZeroTokenCalls,
@@ -156,7 +232,9 @@ func (r *repository) ModelStatsWithFilter(ctx context.Context, filter AnalyticsF
 	coalesce(sum(input_tokens), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(reasoning_tokens), 0),
-	coalesce(sum(case when cached_tokens > cache_tokens then cached_tokens else cache_tokens end), 0),
+	coalesce(sum(` + compatCachedExpr + `), 0),
+	coalesce(sum(cache_read_tokens), 0),
+	coalesce(sum(cache_creation_tokens), 0),
 	coalesce(sum(total_tokens), 0)
 from usage_events ` + where + `
 group by model, billing_model
@@ -180,7 +258,9 @@ select
 	coalesce(sum(f.input_tokens), 0),
 	coalesce(sum(f.output_tokens), 0),
 	coalesce(sum(f.reasoning_tokens), 0),
-	coalesce(sum(case when f.cached_tokens > f.cache_tokens then f.cached_tokens else f.cache_tokens end), 0),
+	coalesce(sum(` + compatCachedFExpr + `), 0),
+	coalesce(sum(f.cache_read_tokens), 0),
+	coalesce(sum(f.cache_creation_tokens), 0),
 	coalesce(sum(f.total_tokens), 0)
 from filtered f
 join top_models t on t.model = f.model
@@ -206,6 +286,8 @@ order by max(t.model_calls) desc, f.model, calls desc`
 			&stat.OutputTokens,
 			&stat.ReasoningTokens,
 			&stat.CachedTokens,
+			&stat.CacheReadTokens,
+			&stat.CacheCreationTokens,
 			&stat.TotalTokens,
 		); err != nil {
 			return nil, err
@@ -276,6 +358,10 @@ func (r *repository) ChannelModelStatsWithFilter(ctx context.Context, filter Ana
 	where, args := analyticsWhere(filter)
 	rows, err := r.db.QueryContext(ctx, `select
 	coalesce(auth_index, ''),
+	coalesce(max(source), ''),
+	coalesce(max(account_snapshot), ''),
+	coalesce(max(auth_label_snapshot), ''),
+	coalesce(nullif(max(auth_provider_snapshot), ''), max(provider), ''),
 	model,
 	coalesce(nullif(resolved_model, ''), model) as billing_model,
 	count(*),
@@ -283,7 +369,9 @@ func (r *repository) ChannelModelStatsWithFilter(ctx context.Context, filter Ana
 	sum(case when failed = 1 then 1 else 0 end),
 	coalesce(sum(input_tokens), 0),
 	coalesce(sum(output_tokens), 0),
-	coalesce(sum(case when cached_tokens > cache_tokens then cached_tokens else cache_tokens end), 0),
+	coalesce(sum(`+compatCachedExpr+`), 0),
+	coalesce(sum(cache_read_tokens), 0),
+	coalesce(sum(cache_creation_tokens), 0),
 	coalesce(sum(total_tokens), 0),
 	avg(nullif(latency_ms, 0))
 from usage_events `+where+`
@@ -299,6 +387,10 @@ order by count(*) desc`, args...)
 		var stat ChannelModelStat
 		if err := rows.Scan(
 			&stat.AuthIndex,
+			&stat.Source,
+			&stat.AccountSnapshot,
+			&stat.AuthLabelSnapshot,
+			&stat.AuthProviderSnapshot,
 			&stat.Model,
 			&stat.BillingModel,
 			&stat.Calls,
@@ -307,6 +399,8 @@ order by count(*) desc`, args...)
 			&stat.InputTokens,
 			&stat.OutputTokens,
 			&stat.CachedTokens,
+			&stat.CacheReadTokens,
+			&stat.CacheCreationTokens,
 			&stat.TotalTokens,
 			&stat.AvgLatencyMS,
 		); err != nil {
@@ -320,8 +414,12 @@ order by count(*) desc`, args...)
 func (r *repository) FailureSourcesWithFilter(ctx context.Context, filter AnalyticsFilter) ([]FailureSourceStat, error) {
 	where, args := analyticsWhere(filter)
 	rows, err := r.db.QueryContext(ctx, `select
+	coalesce(max(source), ''),
 	coalesce(source_hash, ''),
 	coalesce(auth_index, ''),
+	coalesce(max(account_snapshot), ''),
+	coalesce(max(auth_label_snapshot), ''),
+	coalesce(nullif(max(auth_provider_snapshot), ''), max(provider), ''),
 	count(*),
 	sum(case when failed = 1 then 1 else 0 end),
 	max(timestamp_ms),
@@ -338,7 +436,146 @@ order by sum(case when failed = 1 then 1 else 0 end) desc, max(timestamp_ms) des
 	stats := make([]FailureSourceStat, 0)
 	for rows.Next() {
 		var stat FailureSourceStat
-		if err := rows.Scan(&stat.SourceHash, &stat.AuthIndex, &stat.Calls, &stat.FailureCalls, &stat.LastSeenMS, &stat.AvgLatencyMS); err != nil {
+		if err := rows.Scan(
+			&stat.Source,
+			&stat.SourceHash,
+			&stat.AuthIndex,
+			&stat.AccountSnapshot,
+			&stat.AuthLabelSnapshot,
+			&stat.AuthProviderSnapshot,
+			&stat.Calls,
+			&stat.FailureCalls,
+			&stat.LastSeenMS,
+			&stat.AvgLatencyMS,
+		); err != nil {
+			return nil, err
+		}
+		stats = append(stats, stat)
+	}
+	return stats, rows.Err()
+}
+
+func (r *repository) AccountModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]AccountModelStat, error) {
+	where, args := analyticsWhere(filter)
+	rows, err := r.db.QueryContext(ctx, `select
+	coalesce(account_snapshot, ''),
+	coalesce(auth_label_snapshot, ''),
+	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
+	coalesce(auth_index, ''),
+	coalesce(max(source), ''),
+	coalesce(source_hash, ''),
+	model,
+	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	count(*),
+	sum(case when failed = 0 then 1 else 0 end),
+	sum(case when failed = 1 then 1 else 0 end),
+	coalesce(sum(input_tokens), 0),
+	coalesce(sum(output_tokens), 0),
+	coalesce(sum(`+compatCachedExpr+`), 0),
+	coalesce(sum(cache_read_tokens), 0),
+	coalesce(sum(cache_creation_tokens), 0),
+	coalesce(sum(total_tokens), 0),
+	max(timestamp_ms),
+	avg(nullif(latency_ms, 0)),
+	count(nullif(latency_ms, 0))
+from usage_events `+where+`
+group by account_snapshot, auth_label_snapshot, coalesce(nullif(auth_provider_snapshot, ''), provider, ''), auth_index, source_hash, model, billing_model
+order by max(timestamp_ms) desc, count(*) desc`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	stats := make([]AccountModelStat, 0)
+	for rows.Next() {
+		var stat AccountModelStat
+		if err := rows.Scan(
+			&stat.AccountSnapshot,
+			&stat.AuthLabelSnapshot,
+			&stat.AuthProviderSnapshot,
+			&stat.AuthIndex,
+			&stat.Source,
+			&stat.SourceHash,
+			&stat.Model,
+			&stat.BillingModel,
+			&stat.Calls,
+			&stat.SuccessCalls,
+			&stat.FailureCalls,
+			&stat.InputTokens,
+			&stat.OutputTokens,
+			&stat.CachedTokens,
+			&stat.CacheReadTokens,
+			&stat.CacheCreationTokens,
+			&stat.TotalTokens,
+			&stat.LastSeenMS,
+			&stat.AvgLatencyMS,
+			&stat.LatencySamples,
+		); err != nil {
+			return nil, err
+		}
+		stats = append(stats, stat)
+	}
+	return stats, rows.Err()
+}
+
+func (r *repository) APIKeyModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]APIKeyModelStat, error) {
+	where, args := analyticsWhere(filter)
+	rows, err := r.db.QueryContext(ctx, `select
+	coalesce(api_key_hash, ''),
+	coalesce(account_snapshot, ''),
+	coalesce(auth_label_snapshot, ''),
+	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
+	coalesce(auth_index, ''),
+	coalesce(max(source), ''),
+	coalesce(source_hash, ''),
+	model,
+	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	count(*),
+	sum(case when failed = 0 then 1 else 0 end),
+	sum(case when failed = 1 then 1 else 0 end),
+	coalesce(sum(input_tokens), 0),
+	coalesce(sum(output_tokens), 0),
+	coalesce(sum(`+compatCachedExpr+`), 0),
+	coalesce(sum(cache_read_tokens), 0),
+	coalesce(sum(cache_creation_tokens), 0),
+	coalesce(sum(total_tokens), 0),
+	max(timestamp_ms),
+	avg(nullif(latency_ms, 0)),
+	count(nullif(latency_ms, 0))
+from usage_events `+where+`
+group by api_key_hash, account_snapshot, auth_label_snapshot, coalesce(nullif(auth_provider_snapshot, ''), provider, ''), auth_index, source_hash, model, billing_model
+order by max(timestamp_ms) desc, count(*) desc`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	stats := make([]APIKeyModelStat, 0)
+	for rows.Next() {
+		var stat APIKeyModelStat
+		if err := rows.Scan(
+			&stat.APIKeyHash,
+			&stat.AccountSnapshot,
+			&stat.AuthLabelSnapshot,
+			&stat.AuthProviderSnapshot,
+			&stat.AuthIndex,
+			&stat.Source,
+			&stat.SourceHash,
+			&stat.Model,
+			&stat.BillingModel,
+			&stat.Calls,
+			&stat.SuccessCalls,
+			&stat.FailureCalls,
+			&stat.InputTokens,
+			&stat.OutputTokens,
+			&stat.CachedTokens,
+			&stat.CacheReadTokens,
+			&stat.CacheCreationTokens,
+			&stat.TotalTokens,
+			&stat.LastSeenMS,
+			&stat.AvgLatencyMS,
+			&stat.LatencySamples,
+		); err != nil {
 			return nil, err
 		}
 		stats = append(stats, stat)
@@ -362,7 +599,9 @@ func (r *repository) TaskBucketsWithFilter(ctx context.Context, filter Analytics
 	coalesce(group_concat(distinct endpoint), ''),
 	coalesce(sum(input_tokens), 0),
 	coalesce(sum(output_tokens), 0),
-	coalesce(sum(case when cached_tokens > cache_tokens then cached_tokens else cache_tokens end), 0),
+	coalesce(sum(`+compatCachedExpr+`), 0),
+	coalesce(sum(cache_read_tokens), 0),
+	coalesce(sum(cache_creation_tokens), 0),
 	coalesce(sum(total_tokens), 0),
 	avg(nullif(latency_ms, 0)),
 	max(latency_ms)
@@ -393,6 +632,8 @@ limit 500`, args...)
 			&bucket.InputTokens,
 			&bucket.OutputTokens,
 			&bucket.CachedTokens,
+			&bucket.CacheReadTokens,
+			&bucket.CacheCreationTokens,
 			&bucket.TotalTokens,
 			&bucket.AvgLatencyMS,
 			&bucket.MaxLatencyMS,
@@ -415,10 +656,17 @@ func (r *repository) RecentFailuresWithFilter(ctx context.Context, filter Analyt
 	timestamp_ms,
 	model,
 	coalesce(api_key_hash, ''),
+	coalesce(source, ''),
 	coalesce(source_hash, ''),
 	coalesce(auth_index, ''),
 	coalesce(endpoint, ''),
-	latency_ms
+	latency_ms,
+	coalesce(account_snapshot, ''),
+	coalesce(auth_label_snapshot, ''),
+	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
+	coalesce(auth_project_id_snapshot, ''),
+	fail_status_code,
+	coalesce(fail_summary, '')
 from usage_events `+where+`
 and failed = 1
 order by timestamp_ms desc, id desc
@@ -435,10 +683,17 @@ limit ?`, args...)
 			&failure.TimestampMS,
 			&failure.Model,
 			&failure.APIKeyHash,
+			&failure.Source,
 			&failure.SourceHash,
 			&failure.AuthIndex,
 			&failure.Endpoint,
 			&failure.LatencyMS,
+			&failure.AccountSnapshot,
+			&failure.AuthLabelSnapshot,
+			&failure.AuthProviderSnapshot,
+			&failure.AuthProjectIDSnapshot,
+			&failure.FailStatusCode,
+			&failure.FailSummary,
 		); err != nil {
 			return nil, err
 		}
@@ -472,15 +727,21 @@ func (r *repository) EventsPageWithFilter(ctx context.Context, filter AnalyticsF
 	coalesce(api_key_hash, ''),
 	coalesce(account_snapshot, ''),
 	coalesce(auth_label_snapshot, ''),
-	coalesce(auth_provider_snapshot, ''),
+	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
 	coalesce(auth_project_id_snapshot, ''),
+	coalesce(reasoning_effort, ''),
 	input_tokens,
 	output_tokens,
-	case when cached_tokens > cache_tokens then cached_tokens else cache_tokens end,
+	`+compatCachedExpr+`,
+	cache_read_tokens,
+	cache_creation_tokens,
 	reasoning_tokens,
 	total_tokens,
 	latency_ms,
-	failed
+	ttft_ms,
+	failed,
+	fail_status_code,
+	coalesce(fail_summary, '')
 from usage_events `+where+`
 order by timestamp_ms desc, id desc
 limit ?`, args...)
@@ -510,13 +771,19 @@ limit ?`, args...)
 			&item.AuthLabelSnapshot,
 			&item.AuthProviderSnapshot,
 			&item.AuthProjectIDSnapshot,
+			&item.ReasoningEffort,
 			&item.InputTokens,
 			&item.OutputTokens,
 			&item.CachedTokens,
+			&item.CacheReadTokens,
+			&item.CacheCreationTokens,
 			&item.ReasoningTokens,
 			&item.TotalTokens,
 			&item.LatencyMS,
+			&item.TTFTMS,
 			&failed,
+			&item.FailStatusCode,
+			&item.FailSummary,
 		); err != nil {
 			return EventsPage{}, err
 		}
@@ -582,11 +849,11 @@ func analyticsWhere(filter AnalyticsFilter) (string, []any) {
 	if query != "" {
 		like := "%" + query + "%"
 		if hash != "" {
-			conditions = append(conditions, `(lower(coalesce(model, '')) like ? or lower(coalesce(resolved_model, '')) like ? or lower(coalesce(endpoint, '')) like ? or lower(coalesce(source, '')) like ? or lower(coalesce(source_hash, '')) like ? or lower(coalesce(api_key_hash, '')) like ? or lower(coalesce(auth_project_id_snapshot, '')) like ? or lower(coalesce(api_key_hash, '')) = ?)`)
-			args = append(args, like, like, like, like, like, like, like, hash)
+			conditions = append(conditions, `(lower(coalesce(model, '')) like ? or lower(coalesce(resolved_model, '')) like ? or lower(coalesce(endpoint, '')) like ? or lower(coalesce(source, '')) like ? or lower(coalesce(source_hash, '')) like ? or lower(coalesce(api_key_hash, '')) like ? or lower(coalesce(auth_project_id_snapshot, '')) like ? or lower(coalesce(reasoning_effort, '')) like ? or lower(coalesce(fail_summary, '')) like ? or lower(coalesce(api_key_hash, '')) = ?)`)
+			args = append(args, like, like, like, like, like, like, like, like, like, hash)
 		} else {
-			conditions = append(conditions, `(lower(coalesce(model, '')) like ? or lower(coalesce(resolved_model, '')) like ? or lower(coalesce(endpoint, '')) like ? or lower(coalesce(source, '')) like ? or lower(coalesce(source_hash, '')) like ? or lower(coalesce(api_key_hash, '')) like ? or lower(coalesce(auth_project_id_snapshot, '')) like ?)`)
-			args = append(args, like, like, like, like, like, like, like)
+			conditions = append(conditions, `(lower(coalesce(model, '')) like ? or lower(coalesce(resolved_model, '')) like ? or lower(coalesce(endpoint, '')) like ? or lower(coalesce(source, '')) like ? or lower(coalesce(source_hash, '')) like ? or lower(coalesce(api_key_hash, '')) like ? or lower(coalesce(auth_project_id_snapshot, '')) like ? or lower(coalesce(reasoning_effort, '')) like ? or lower(coalesce(fail_summary, '')) like ?)`)
+			args = append(args, like, like, like, like, like, like, like, like, like)
 		}
 	} else if hash != "" {
 		conditions = append(conditions, "lower(coalesce(api_key_hash, '')) = ?")
@@ -604,6 +871,8 @@ func analyticsWhere(filter AnalyticsFilter) (string, []any) {
 		}
 	}
 	addInCondition("model", filter.Models)
+	addProviderCondition(filter.Providers, &conditions, &args)
+	addAccountCondition(filter.Accounts, &conditions, &args)
 	addInCondition("auth_index", filter.AuthIndices)
 	addInCondition("api_key_hash", filter.APIKeyHashes)
 	addInCondition("source_hash", filter.SourceHashes)
@@ -618,6 +887,44 @@ func analyticsWhere(filter AnalyticsFilter) (string, []any) {
 	}
 
 	return "where " + strings.Join(conditions, " and "), args
+}
+
+func addProviderCondition(values []string, conditions *[]string, args *[]any) {
+	normalized := normalizeLowerFilterValues(values)
+	if len(normalized) == 0 {
+		return
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(normalized)), ",")
+	providerConditions := []string{
+		fmt.Sprintf("lower(coalesce(provider, '')) in (%s)", placeholders),
+		fmt.Sprintf("lower(coalesce(auth_provider_snapshot, '')) in (%s)", placeholders),
+	}
+	*conditions = append(*conditions, "("+strings.Join(providerConditions, " or ")+")")
+	for range providerConditions {
+		for _, value := range normalized {
+			*args = append(*args, value)
+		}
+	}
+}
+
+func addAccountCondition(values []string, conditions *[]string, args *[]any) {
+	normalized := normalizeLowerFilterValues(values)
+	if len(normalized) == 0 {
+		return
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(normalized)), ",")
+	accountConditions := []string{
+		fmt.Sprintf("lower(coalesce(account_snapshot, '')) in (%s)", placeholders),
+		fmt.Sprintf("lower(coalesce(auth_label_snapshot, '')) in (%s)", placeholders),
+		fmt.Sprintf("lower(coalesce(source, '')) in (%s)", placeholders),
+		fmt.Sprintf("lower(coalesce(auth_index, '')) in (%s)", placeholders),
+	}
+	*conditions = append(*conditions, "("+strings.Join(accountConditions, " or ")+")")
+	for range accountConditions {
+		for _, value := range normalized {
+			*args = append(*args, value)
+		}
+	}
 }
 
 func normalizeFilterValues(values []string) []string {
@@ -635,4 +942,12 @@ func normalizeFilterValues(values []string) []string {
 		result = append(result, trimmed)
 	}
 	return result
+}
+
+func normalizeLowerFilterValues(values []string) []string {
+	normalized := normalizeFilterValues(values)
+	for index, value := range normalized {
+		normalized[index] = strings.ToLower(value)
+	}
+	return normalized
 }

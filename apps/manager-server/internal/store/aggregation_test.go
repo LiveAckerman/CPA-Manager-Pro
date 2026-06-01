@@ -76,6 +76,10 @@ func TestAggregateBetween(t *testing.T) {
 	if len(failures) != 1 || failures[0].Model != "gpt-b" || failures[0].TimestampMS != 1_500 {
 		t.Fatalf("failures = %#v", failures)
 	}
+	if failures[0].Source != "user@example.com" || failures[0].FailSummary != "upstream rate limit" ||
+		!failures[0].FailStatusCode.Valid || failures[0].FailStatusCode.Int64 != 429 {
+		t.Fatalf("failure detail fields = %#v", failures[0])
+	}
 
 	buckets, err := db.BucketTimelineBetween(context.Background(), 1_000, 2_000, 500)
 	if err != nil {
@@ -120,6 +124,8 @@ func aggregationEvent(
 		TotalTokens:     totalTokens,
 		LatencyMS:       latencyMS,
 		Failed:          failed,
+		FailStatusCode:  429,
+		FailSummary:     "upstream rate limit",
 		CreatedAtMS:     timestampMS,
 	}
 }

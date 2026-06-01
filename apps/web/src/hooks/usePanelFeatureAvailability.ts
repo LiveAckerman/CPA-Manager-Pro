@@ -189,6 +189,22 @@ export function managerConfigTargetsDifferentCPA({
   );
 }
 
+type PanelFeatureAvailabilityRequestInput = {
+  apiBase: string;
+  managementKey: string;
+  usageServiceEnabled: boolean;
+  usageServiceBase: string;
+  usageServiceRevision: number;
+  storedPanelBase: string;
+  storedPanelHostMode: PanelHostMode | '';
+  panelBase: string;
+};
+
+type PanelFeatureAvailabilityRequest = {
+  key: string;
+  promise: Promise<PanelFeatureAvailability>;
+};
+
 const initialAvailability: PanelFeatureAvailability = {
   checking: true,
   panelHostMode: 'external_panel',
@@ -203,6 +219,156 @@ const initialAvailability: PanelFeatureAvailability = {
   reason: 'checking',
 };
 
+let cachedAvailabilityKey = '';
+let cachedAvailability: PanelFeatureAvailability | null = null;
+let inFlightAvailabilityRequest: PanelFeatureAvailabilityRequest | null = null;
+let latestAvailabilityRequestKey = '';
+
+const buildAvailabilityRequestKey = ({
+  apiBase,
+  managementKey,
+  usageServiceEnabled,
+  usageServiceBase,
+  usageServiceRevision,
+  storedPanelBase,
+  storedPanelHostMode,
+  panelBase,
+}: PanelFeatureAvailabilityRequestInput): string =>
+  [
+    normalizeBase(panelBase),
+    normalizeBase(apiBase),
+    managementKey,
+    usageServiceEnabled ? '1' : '0',
+    normalizeBase(usageServiceBase),
+    String(usageServiceRevision),
+    normalizeBase(storedPanelBase),
+    storedPanelHostMode,
+  ].join('\u001f');
+
+async function detectPanelFeatureAvailability({
+  apiBase,
+  managementKey,
+  usageServiceEnabled,
+  usageServiceBase,
+  storedPanelBase,
+  storedPanelHostMode,
+  panelBase,
+}: PanelFeatureAvailabilityRequestInput): Promise<PanelFeatureAvailability> {
+  const normalizedPanelBase = normalizeBase(panelBase);
+  if (!managementKey) {
+    return resolvePanelFeatureAvailability({
+      checking: false,
+      panelHostedByUsageService: false,
+      panelBase: normalizedPanelBase,
+      managerServiceBase: '',
+      managerConfig: null,
+      hasManagerCandidate: false,
+      managementKey,
+    });
+  }
+
+  let panelHostedByUsageService = false;
+  try {
+    const info = await usageServiceApi.getInfo(normalizedPanelBase);
+    panelHostedByUsageService = isUsageServiceId(info.service);
+  } catch {
+    panelHostedByUsageService = false;
+  }
+
+  const candidates = buildPanelManagerServiceCandidates({
+    panelHostedByUsageService,
+    panelBase: normalizedPanelBase,
+    apiBase,
+    usageServiceEnabled,
+    usageServiceBase,
+    storedPanelBase,
+    storedPanelHostMode,
+  });
+  let hasManagerMismatch = false;
+
+  for (const candidate of candidates) {
+    try {
+      const info = await usageServiceApi.getInfo(candidate);
+      if (!isUsageServiceId(info.service)) continue;
+      const response = await usageServiceApi.getManagerConfig(candidate, managementKey);
+      if (
+        !managerConfigMatchesPanel({
+          panelHostedByUsageService,
+          apiBase,
+          config: response.config,
+        })
+      ) {
+        if (
+          managerConfigTargetsDifferentCPA({
+            panelHostedByUsageService,
+            apiBase,
+            config: response.config,
+          })
+        ) {
+          hasManagerMismatch = true;
+        }
+        continue;
+      }
+      return resolvePanelFeatureAvailability({
+        checking: false,
+        panelHostedByUsageService,
+        panelBase: normalizedPanelBase,
+        managerServiceBase: candidate,
+        managerConfig: response.config,
+        hasManagerCandidate: candidates.length > 0,
+        managementKey,
+      });
+    } catch {
+      // Continue probing; a regular CPA endpoint or unreachable Manager Server is expected here.
+    }
+  }
+
+  const unavailableState = resolvePanelFeatureAvailability({
+    checking: false,
+    panelHostedByUsageService,
+    panelBase: normalizedPanelBase,
+    managerServiceBase: '',
+    managerConfig: null,
+    hasManagerCandidate: candidates.length > 0,
+    managementKey,
+  });
+  if (hasManagerMismatch) {
+    return {
+      ...unavailableState,
+      reason: 'manager_mismatch',
+    };
+  }
+  return unavailableState;
+}
+
+function requestPanelFeatureAvailability(
+  input: PanelFeatureAvailabilityRequestInput
+): { key: string; promise: Promise<PanelFeatureAvailability> } {
+  const key = buildAvailabilityRequestKey(input);
+  if (cachedAvailabilityKey === key && cachedAvailability) {
+    return { key, promise: Promise.resolve(cachedAvailability) };
+  }
+  if (inFlightAvailabilityRequest?.key === key) {
+    return inFlightAvailabilityRequest;
+  }
+
+  latestAvailabilityRequestKey = key;
+  const promise = detectPanelFeatureAvailability(input).then((availability) => {
+    if (latestAvailabilityRequestKey === key) {
+      cachedAvailabilityKey = key;
+      cachedAvailability = availability;
+    }
+    return availability;
+  });
+  inFlightAvailabilityRequest = { key, promise };
+  promise.finally(() => {
+    if (inFlightAvailabilityRequest?.key === key) {
+      inFlightAvailabilityRequest = null;
+    }
+  });
+  return inFlightAvailabilityRequest;
+}
+
 export function usePanelFeatureAvailability(): PanelFeatureAvailability {
   const apiBase = useAuthStore((state) => state.apiBase);
   const managementKey = useAuthStore((state) => state.managementKey);
@@ -212,129 +378,66 @@ export function usePanelFeatureAvailability(): PanelFeatureAvailability {
   const storedPanelBase = useUsageServiceStore((state) => state.panelBase);
   const storedPanelHostMode = useUsageServiceStore((state) => state.panelHostMode);
   const panelBase = useMemo(() => detectApiBaseFromLocation(), []);
-  const [state, setState] = useState<PanelFeatureAvailability>(initialAvailability);
+  const requestInput = useMemo(
+    () => ({
+      apiBase,
+      managementKey,
+      usageServiceEnabled,
+      usageServiceBase,
+      usageServiceRevision,
+      storedPanelBase,
+      storedPanelHostMode,
+      panelBase,
+    }),
+    [
+      apiBase,
+      managementKey,
+      panelBase,
+      storedPanelBase,
+      storedPanelHostMode,
+      usageServiceBase,
+      usageServiceEnabled,
+      usageServiceRevision,
+    ]
+  );
+  const requestKey = useMemo(
+    () => buildAvailabilityRequestKey(requestInput),
+    [requestInput]
+  );
+  const [state, setState] = useState<PanelFeatureAvailability>(() =>
+    cachedAvailabilityKey === requestKey && cachedAvailability
+      ? cachedAvailability
+      : initialAvailability
+  );
 
   useEffect(() => {
     let cancelled = false;
-
-    const detect = async () => {
-      const normalizedPanelBase = normalizeBase(panelBase);
-      if (!managementKey) {
-        setState(
-          resolvePanelFeatureAvailability({
-            checking: false,
-            panelHostedByUsageService: false,
-            panelBase: normalizedPanelBase,
-            managerServiceBase: '',
-            managerConfig: null,
-            hasManagerCandidate: false,
-            managementKey,
-          })
-        );
-        return;
-      }
-
-      setState((current) => ({
-        ...current,
-        checking: true,
-        panelBase: normalizedPanelBase,
-        reason: 'checking',
-      }));
-
-      let panelHostedByUsageService = false;
-      try {
-        const info = await usageServiceApi.getInfo(normalizedPanelBase);
-        panelHostedByUsageService = isUsageServiceId(info.service);
-      } catch {
-        panelHostedByUsageService = false;
-      }
-
-      const candidates = buildPanelManagerServiceCandidates({
-        panelHostedByUsageService,
-        panelBase: normalizedPanelBase,
-        apiBase,
-        usageServiceEnabled,
-        usageServiceBase,
-        storedPanelBase,
-        storedPanelHostMode,
+    const hasCachedAvailability = cachedAvailabilityKey === requestKey && cachedAvailability;
+    if (!hasCachedAvailability) {
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setState((current) => ({
+          ...current,
+          checking: true,
+          panelBase: normalizeBase(panelBase),
+          reason: 'checking',
+        }));
       });
-      let hasManagerMismatch = false;
+    }
 
-      for (const candidate of candidates) {
-        try {
-          const info = await usageServiceApi.getInfo(candidate);
-          if (!isUsageServiceId(info.service)) continue;
-          const response = await usageServiceApi.getManagerConfig(candidate, managementKey);
-          if (
-            !managerConfigMatchesPanel({
-              panelHostedByUsageService,
-              apiBase,
-              config: response.config,
-            })
-          ) {
-            if (
-              managerConfigTargetsDifferentCPA({
-                panelHostedByUsageService,
-                apiBase,
-                config: response.config,
-              })
-            ) {
-              hasManagerMismatch = true;
-            }
-            continue;
-          }
-          if (cancelled) return;
-          setState(
-            resolvePanelFeatureAvailability({
-              checking: false,
-              panelHostedByUsageService,
-              panelBase: normalizedPanelBase,
-              managerServiceBase: candidate,
-              managerConfig: response.config,
-              hasManagerCandidate: candidates.length > 0,
-              managementKey,
-            })
-          );
-          return;
-        } catch {
-          // Continue probing; a regular CPA endpoint or unreachable Manager Server is expected here.
-        }
-      }
-
-      if (cancelled) return;
-      const unavailableState = resolvePanelFeatureAvailability({
-        checking: false,
-        panelHostedByUsageService,
-        panelBase: normalizedPanelBase,
-        managerServiceBase: '',
-        managerConfig: null,
-        hasManagerCandidate: candidates.length > 0,
-        managementKey,
-      });
-      if (hasManagerMismatch) {
-        setState({
-          ...unavailableState,
-          reason: 'manager_mismatch',
-        });
-        return;
-      }
-      setState(unavailableState);
-    };
-
-    void detect();
+    const request = requestPanelFeatureAvailability(requestInput);
+    request.promise.then((availability) => {
+      if (cancelled || request.key !== requestKey) return;
+      setState(availability);
+    });
 
     return () => {
       cancelled = true;
     };
   }, [
-    apiBase,
-    managementKey,
     panelBase,
-    storedPanelBase,
-    storedPanelHostMode,
-    usageServiceBase,
-    usageServiceEnabled,
-    usageServiceRevision,
+    requestInput,
+    requestKey,
   ]);
 
   return state;

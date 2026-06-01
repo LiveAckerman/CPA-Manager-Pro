@@ -116,7 +116,7 @@ func TestServerCompatPanelPathOverridesEmbeddedPanel(t *testing.T) {
 func TestServerCompatSetupConfigAndEnvLock(t *testing.T) {
 	cpa := testutil.NewCPAMock(t)
 	cfg := testutil.NewConfig(t)
-	handler, _ := newCompatHandler(t, cfg, nil)
+	handler, db := newCompatHandler(t, cfg, nil)
 
 	setupBody := `{"cpaBaseUrl":"` + cpa.URL() + `","managementKey":"management-key","requestMonitoringEnabled":false,"ensureUsageStatisticsEnabled":false}`
 	setupRR := testutil.Request(t, handler, http.MethodPost, "/setup", setupBody, testutil.AdminKey)
@@ -133,6 +133,13 @@ func TestServerCompatSetupConfigAndEnvLock(t *testing.T) {
 	testutil.DecodeJSON(t, infoRR, &info)
 	if !info.Configured {
 		t.Fatalf("configured = false after setup")
+	}
+	state, ok, err := db.LoadBootstrapState(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("load bootstrap state ok=%v err=%v", ok, err)
+	}
+	if !state.ProjectInitialized || !state.AdminReady || !state.DataKeyReady || state.Status != "ready" {
+		t.Fatalf("bootstrap state after setup = %#v", state)
 	}
 
 	configRR := testutil.Request(t, handler, http.MethodGet, "/usage-service/config", "", testutil.AdminKey)
@@ -160,6 +167,33 @@ func TestServerCompatSetupConfigAndEnvLock(t *testing.T) {
 	testutil.RequireStatus(t, conflictRR, http.StatusConflict)
 	if !strings.Contains(conflictRR.Body.String(), `"code":"connection_env_managed"`) {
 		t.Fatalf("conflict body = %s", conflictRR.Body.String())
+	}
+}
+
+func TestServerCompatInfoIgnoresStaleUninitializedBootstrapState(t *testing.T) {
+	cpa := testutil.NewCPAMock(t)
+	setup := &store.Setup{CPAUpstreamURL: cpa.URL(), ManagementKey: "management-key", Queue: "usage", PopSide: "right"}
+	handler, db := newCompatHandler(t, testutil.NewConfig(t), setup)
+	if err := db.SaveBootstrapState(context.Background(), store.BootstrapState{
+		Version:            1,
+		Status:             "fresh",
+		AdminReady:         true,
+		ProjectInitialized: false,
+		DataKeyReady:       true,
+	}); err != nil {
+		t.Fatalf("save stale bootstrap state: %v", err)
+	}
+
+	infoRR := testutil.Request(t, handler, http.MethodGet, "/usage-service/info", "", "")
+	testutil.RequireStatus(t, infoRR, http.StatusOK)
+	var info struct {
+		Configured         bool `json:"configured"`
+		ProjectInitialized bool `json:"projectInitialized"`
+		SetupRequired      bool `json:"setupRequired"`
+	}
+	testutil.DecodeJSON(t, infoRR, &info)
+	if !info.Configured || !info.ProjectInitialized || info.SetupRequired {
+		t.Fatalf("info response = %#v", info)
 	}
 }
 

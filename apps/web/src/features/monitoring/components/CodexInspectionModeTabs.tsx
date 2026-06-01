@@ -38,6 +38,7 @@ export function CodexInspectionModeTabs({ activeMode }: CodexInspectionModeTabsP
     (item) =>
       item.mode === 'local' ||
       item.mode === activeMode ||
+      availability.checking ||
       availability.serverCodexInspectionAvailable
   );
 

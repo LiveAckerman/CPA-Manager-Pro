@@ -1,11 +1,15 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import type {
-  DashboardChannelHealth,
-  DashboardRecentFailure,
-} from '@/services/api/usageService';
+import type { DashboardChannelHealth, DashboardRecentFailure } from '@/services/api/usageService';
+import type { CredentialInfo } from '@/types/sourceInfo';
 import type { MonitoringAuthMeta, MonitoringChannelMeta } from '@/features/monitoring/model/types';
-import { formatDurationMs, normalizeAuthIndex } from '@/utils/usage';
+import {
+  buildMonitoringSourceDisplay,
+  type MonitoringSourceDisplay,
+} from '@/features/monitoring/model/sourceDisplay';
+import { buildSourceInfoMap } from '@/utils/sourceResolver';
+import { maskSensitiveText, truncateText } from '@/utils/format';
+import { formatDurationMs } from '@/utils/usage';
 import styles from './HealthAlertsCard.module.scss';
 
 interface HealthAlertsCardProps {
@@ -13,21 +17,19 @@ interface HealthAlertsCardProps {
   recentFailures: DashboardRecentFailure[];
   channelHealth: DashboardChannelHealth[];
   authMetaMap: Map<string, MonitoringAuthMeta>;
+  authFileMap: Map<string, CredentialInfo>;
+  sourceInfoMap: ReturnType<typeof buildSourceInfoMap>;
   channelByAuthIndex: Map<string, MonitoringChannelMeta>;
   apiKeyAliasMap: Map<string, string>;
 }
-
-const shortHash = (value: string) => {
-  const trimmed = value.trim();
-  if (!trimmed) return '-';
-  return trimmed.length <= 12 ? trimmed : `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
-};
 
 export function HealthAlertsCard({
   loading,
   recentFailures,
   channelHealth,
   authMetaMap,
+  authFileMap,
+  sourceInfoMap,
   channelByAuthIndex,
   apiKeyAliasMap,
 }: HealthAlertsCardProps) {
@@ -42,96 +44,89 @@ export function HealthAlertsCard({
     [i18n.language]
   );
 
-  const resolveAuthMeta = (authIndex: string | undefined) => {
-    const normalized = normalizeAuthIndex(authIndex) ?? '';
-    if (!normalized || normalized === '-') return {};
-
-    const authMeta = authMetaMap.get(normalized);
-    const channelMeta =
-      channelByAuthIndex.get(normalized) ||
-      (authMeta?.authIndex ? channelByAuthIndex.get(authMeta.authIndex) : undefined);
-
-    return { normalized, authMeta, channelMeta };
-  };
-
-  const resolveAuthDisplay = (authIndex: string | undefined, fallback = '') => {
-    const { normalized, authMeta, channelMeta } = resolveAuthMeta(authIndex);
-    if (!normalized) return fallback;
-
-    return (
-      channelMeta?.name ||
-      authMeta?.label ||
-      authMeta?.account ||
-      authMeta?.provider ||
-      fallback ||
-      normalized
-    );
-  };
-
-  const resolveChannelBaseDisplay = (channel: DashboardChannelHealth) => {
-    const record = channel as DashboardChannelHealth & {
-      auth_label?: string;
-      account?: string;
-      channel?: string;
-    };
-    const { normalized, authMeta, channelMeta } = resolveAuthMeta(channel.auth_index);
-    const base =
-      record.channel?.trim() ||
-      channelMeta?.name ||
-      record.auth_label?.trim() ||
-      authMeta?.label ||
-      record.account?.trim() ||
-      authMeta?.account ||
-      authMeta?.provider ||
-      normalized ||
-      channel.auth_index;
-
-    const suffixCandidates = [
-      record.auth_label,
-      record.account,
-      authMeta?.label,
-      authMeta?.account,
-      authMeta?.provider,
-      normalized ? `#${shortHash(normalized)}` : '',
-    ]
-      .map((item) => item?.trim())
-      .filter((item): item is string => Boolean(item && item !== '-' && item !== base));
-    const suffix = Array.from(new Set(suffixCandidates))[0] || '';
-    const title = [base, suffix, normalized || channel.auth_index].filter(Boolean).join(' · ');
-
-    return { base, suffix, title };
+  const sourceDisplayContext = {
+    authMetaMap,
+    authFileMap,
+    sourceInfoMap,
+    channelByAuthIndex,
+    apiKeyAliasMap,
   };
 
   const channelRows = channelHealth.slice(0, 5).map((channel, index) => ({
     channel,
     key: `${channel.auth_index}-${index}`,
-    display: resolveChannelBaseDisplay(channel),
+    display: buildMonitoringSourceDisplay(
+      {
+        source: channel.source,
+        authIndex: channel.auth_index,
+        accountSnapshot: channel.account_snapshot,
+        authLabelSnapshot: channel.auth_label_snapshot,
+        authProviderSnapshot: channel.auth_provider_snapshot,
+        authLabel: channel.auth_label,
+        account: channel.account,
+        channel: channel.channel,
+      },
+      sourceDisplayContext
+    ),
   }));
   const channelNameCounts = channelRows.reduce((map, row) => {
-    map.set(row.display.base, (map.get(row.display.base) ?? 0) + 1);
+    map.set(row.display.primary, (map.get(row.display.primary) ?? 0) + 1);
     return map;
   }, new Map<string, number>());
 
-  const resolveRecentFailureDisplay = (failure: DashboardRecentFailure) => {
-    const record = failure as DashboardRecentFailure & {
-      auth_label?: string;
-      account?: string;
-      channel?: string;
-      api_key_alias?: string;
-      source?: string;
-    };
-    const apiKeyAlias = apiKeyAliasMap.get((failure.api_key_hash || '').toLowerCase());
-    return (
-      record.channel?.trim() ||
-      record.auth_label?.trim() ||
-      record.account?.trim() ||
-      resolveAuthDisplay(failure.auth_index) ||
-      record.api_key_alias?.trim() ||
-      apiKeyAlias ||
-      record.source?.trim() ||
-      shortHash(failure.source_hash || failure.api_key_hash)
+  const buildRecentFailureDisplay = (failure: DashboardRecentFailure) =>
+    buildMonitoringSourceDisplay(
+      {
+        source: failure.source,
+        sourceHash: failure.source_hash,
+        apiKeyHash: failure.api_key_hash,
+        authIndex: failure.auth_index,
+        accountSnapshot: failure.account_snapshot,
+        authLabelSnapshot: failure.auth_label_snapshot,
+        authProviderSnapshot: failure.auth_provider_snapshot,
+        channel: failure.channel,
+        authLabel: failure.auth_label,
+        account: failure.account,
+        apiKeyAlias: failure.api_key_alias,
+      },
+      sourceDisplayContext
     );
+
+  const buildFailureTooltip = (failure: DashboardRecentFailure) => {
+    const statusCode = failure.fail_status_code;
+    const summary = maskSensitiveText(failure.fail_summary || '');
+    if (!statusCode && !summary) return null;
+    const statusText = statusCode ? `${t('monitoring.fail_status_code_short')} ${statusCode}` : '';
+    const compactSummary = summary ? truncateText(summary, 160) : '';
+    return {
+      statusText,
+      summary: compactSummary,
+      title: [statusText, compactSummary].filter(Boolean).join(' · '),
+    };
   };
+
+  const renderFailureName = (
+    display: MonitoringSourceDisplay,
+    tooltip: ReturnType<typeof buildFailureTooltip>
+  ) => (
+    <span
+      className={tooltip ? styles.failureSourceWithTooltip : undefined}
+      tabIndex={tooltip ? 0 : undefined}
+      title={tooltip ? undefined : display.title}
+    >
+      <span className={styles.failureSourceText}>{display.primary}</span>
+      {tooltip ? (
+        <span role="tooltip" className={styles.failureTooltip}>
+          {tooltip.statusText ? (
+            <span className={styles.failureTooltipStatus}>{tooltip.statusText}</span>
+          ) : null}
+          {tooltip.summary ? (
+            <span className={styles.failureTooltipBody}>{tooltip.summary}</span>
+          ) : null}
+        </span>
+      ) : null}
+    </span>
+  );
 
   return (
     <>
@@ -142,13 +137,13 @@ export function HealthAlertsCard({
         </div>
         <div className={styles.list}>
           {channelRows.map(({ channel, key, display }) => {
-            const isDuplicateName = (channelNameCounts.get(display.base) ?? 0) > 1;
+            const isDuplicateName = (channelNameCounts.get(display.primary) ?? 0) > 1;
             const label =
               channel.auth_index === '-'
                 ? t('dashboard.health_unlinked_channel')
-                : isDuplicateName && display.suffix
-                  ? `${display.base} · ${display.suffix}`
-                  : display.base;
+                : isDuplicateName && display.meta
+                  ? `${display.primary} · ${display.meta}`
+                  : display.primary;
 
             return (
               <div key={key} className={styles.listItem}>
@@ -164,7 +159,9 @@ export function HealthAlertsCard({
             );
           })}
           {channelHealth.length === 0 ? (
-            <div className={styles.empty}>{loading ? '...' : t('dashboard.no_channel_health_data')}</div>
+            <div className={styles.empty}>
+              {loading ? '...' : t('dashboard.no_channel_health_data')}
+            </div>
           ) : null}
         </div>
       </section>
@@ -175,22 +172,31 @@ export function HealthAlertsCard({
           <h3>{t('dashboard.recent_failed_requests')}</h3>
         </div>
         <div className={styles.list}>
-          {recentFailures.slice(0, 3).map((failure) => (
-            <div key={`${failure.timestamp_ms}-${failure.source_hash}-${failure.model}`} className={styles.failureItem}>
-              <div className={styles.failureMeta}>
-                <span className={styles.time}>{new Date(failure.timestamp_ms).toLocaleTimeString(i18n.language)}</span>
-                <span className={styles.model}>{failure.model}</span>
+          {recentFailures.slice(0, 3).map((failure) => {
+            const display = buildRecentFailureDisplay(failure);
+            const tooltip = buildFailureTooltip(failure);
+            return (
+              <div
+                key={`${failure.timestamp_ms}-${failure.source_hash}-${failure.model}`}
+                className={styles.failureItem}
+              >
+                <div className={styles.failureMeta}>
+                  <span className={styles.time}>
+                    {new Date(failure.timestamp_ms).toLocaleTimeString(i18n.language)}
+                  </span>
+                  <span className={styles.model}>{failure.model}</span>
+                </div>
+                <div className={styles.failureDetail}>
+                  {renderFailureName(display, tooltip)}
+                  <span>{formatDurationMs(failure.duration_ms, { locale: i18n.language })}</span>
+                </div>
               </div>
-              <div className={styles.failureDetail}>
-                <span title={[failure.auth_index, failure.source_hash, failure.api_key_hash].filter(Boolean).join(' · ')}>
-                  {resolveRecentFailureDisplay(failure)}
-                </span>
-                <span>{formatDurationMs(failure.duration_ms, { locale: i18n.language })}</span>
-              </div>
-            </div>
-          ))}
+            );
+          })}
           {recentFailures.length === 0 ? (
-            <div className={styles.empty}>{loading ? '...' : t('dashboard.no_recent_failures')}</div>
+            <div className={styles.empty}>
+              {loading ? '...' : t('dashboard.no_recent_failures')}
+            </div>
           ) : null}
         </div>
       </section>

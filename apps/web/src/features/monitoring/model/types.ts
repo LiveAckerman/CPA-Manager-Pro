@@ -119,6 +119,9 @@ export type MonitoringTaskBucketRow = {
   failed: boolean;
   modelsText: string;
   totalTokens: number;
+  cachedTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
   totalCost: number;
   averageLatencyMs: number | null;
   maxLatencyMs: number | null;
@@ -167,12 +170,19 @@ export type MonitoringEventRow = {
   failed: boolean;
   statsIncluded: boolean;
   latencyMs: number | null;
+  ttftMs: number | null;
+  tokensPerSecond: number | null;
   inputTokens: number;
   outputTokens: number;
   reasoningTokens: number;
   cachedTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
   totalTokens: number;
   totalCost: number;
+  reasoningEffort?: string;
+  failStatusCode?: number | null;
+  failSummary?: string;
   taskKey: string;
   searchText: string;
 };
@@ -186,6 +196,8 @@ export type MonitoringSummary = {
   outputTokens: number;
   reasoningTokens: number;
   cachedTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
   totalTokens: number;
   totalCost: number;
   averageLatencyMs: number | null;
@@ -209,6 +221,8 @@ export type MonitoringAccountModelSpendRow = {
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
   totalTokens: number;
   totalCost: number;
   lastSeenAt: number;
@@ -217,6 +231,7 @@ export type MonitoringAccountModelSpendRow = {
 export type MonitoringAccountRow = {
   id: string;
   account: string;
+  filterValue?: string;
   displayAccount: string;
   accountMasked: string;
   authLabels: string[];
@@ -229,6 +244,8 @@ export type MonitoringAccountRow = {
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
   totalTokens: number;
   totalCost: number;
   averageLatencyMs: number | null;
@@ -255,11 +272,21 @@ export type MonitoringApiKeyRow = {
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
   totalTokens: number;
   totalCost: number;
   averageLatencyMs: number | null;
   lastSeenAt: number;
   models: MonitoringApiKeyModelSpendRow[];
+};
+
+export type MonitoringFilterOptions = {
+  accountRows: MonitoringAccountRow[];
+  apiKeyRows: MonitoringApiKeyRow[];
+  providers: string[];
+  models: string[];
+  channels: string[];
 };
 
 export type MonitoringRealtimeRow = {
@@ -282,6 +309,8 @@ export type MonitoringRealtimeRow = {
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
   totalTokens: number;
   totalCost: number;
   lastSeenAt: number;
@@ -337,10 +366,15 @@ export interface UseMonitoringDataReturn {
   failureSourceRows: MonitoringFailureSourceRow[];
   taskBuckets: MonitoringTaskBucketRow[];
   recentFailures: MonitoringFailureRow[];
+  accountRows: MonitoringAccountRow[];
+  apiKeyRows: MonitoringApiKeyRow[];
+  filterOptions: MonitoringFilterOptions;
   filteredRows: MonitoringEventRow[];
   eventsHasMore: boolean;
   eventsLoadingMore: boolean;
   lastRefreshedAt: Date | null;
+  isTransitioningScope: boolean;
+  hasPresentationSnapshot: boolean;
   refreshMeta: (showLoading?: boolean) => Promise<void>;
   loadMoreEvents: () => void;
 }

@@ -1,10 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { act, createElement } from 'react';
+import { create, type ReactTestRenderer } from 'react-test-renderer';
+import { describe, expect, it, vi } from 'vitest';
 import type { ManagerConfig } from '@/services/api/usageService';
+import { usageServiceApi } from '@/services/api/usageService';
+import { useAuthStore, useUsageServiceStore } from '@/stores';
 import {
   buildPanelManagerServiceCandidates,
   managerConfigMatchesPanel,
   managerConfigTargetsDifferentCPA,
   resolvePanelFeatureAvailability,
+  usePanelFeatureAvailability,
 } from './usePanelFeatureAvailability';
 
 const buildManagerConfig = (overrides: Partial<ManagerConfig> = {}): ManagerConfig => ({
@@ -27,6 +32,22 @@ const buildManagerConfig = (overrides: Partial<ManagerConfig> = {}): ManagerConf
   },
   ...overrides,
 });
+
+const createMemoryStorage = () => {
+  const store = new Map<string, string>();
+  return {
+    getItem: (key: string) => (store.has(key) ? (store.get(key) as string) : null),
+    setItem: (key: string, value: string) => {
+      store.set(key, value);
+    },
+    removeItem: (key: string) => {
+      store.delete(key);
+    },
+    clear: () => {
+      store.clear();
+    },
+  };
+};
 
 describe('panel feature availability', () => {
   it('uses the current embedded Manager Server as the only Docker-mode candidate', () => {
@@ -119,5 +140,73 @@ describe('panel feature availability', () => {
     expect(availability.serverCodexInspectionAvailable).toBe(true);
     expect(availability.requestMonitoringAvailable).toBe(false);
     expect(availability.reason).toBe('monitoring_disabled');
+  });
+
+  it('shares one feature detection request across concurrent hook consumers', async () => {
+    const getInfoSpy = vi
+      .spyOn(usageServiceApi, 'getInfo')
+      .mockImplementation(async (base) => ({
+        service: base === 'http://manager.local:18317' ? 'cpa-manager-plus' : 'cli-proxy-api',
+      }));
+    const getManagerConfigSpy = vi
+      .spyOn(usageServiceApi, 'getManagerConfig')
+      .mockResolvedValue({ config: buildManagerConfig(), source: 'db' });
+    let renderer: ReactTestRenderer | null = null;
+    vi.stubGlobal('window', {
+      location: {
+        protocol: 'http:',
+        hostname: 'panel.local',
+        host: 'panel.local:5174',
+        port: '5174',
+      },
+    });
+    vi.stubGlobal('navigator', { userAgent: 'vitest' });
+    vi.stubGlobal('localStorage', createMemoryStorage());
+
+    try {
+      useAuthStore.setState({
+        apiBase: 'http://cpa.local:8317',
+        managementKey: 'management-key',
+      });
+      useUsageServiceStore.setState({
+        enabled: true,
+        serviceBase: 'http://manager.local:18317',
+        panelBase: 'http://panel.local:5174',
+        panelHostMode: 'external_panel',
+        revision: 1001,
+      });
+
+      function HookConsumer() {
+        usePanelFeatureAvailability();
+        return null;
+      }
+
+      await act(async () => {
+        renderer = create(
+          createElement(
+            'div',
+            null,
+            createElement(HookConsumer),
+            createElement(HookConsumer)
+          )
+        );
+      });
+
+      expect(getInfoSpy).toHaveBeenCalledTimes(2);
+      expect(getInfoSpy).toHaveBeenNthCalledWith(1, 'http://panel.local:5174');
+      expect(getInfoSpy).toHaveBeenNthCalledWith(2, 'http://manager.local:18317');
+      expect(getManagerConfigSpy).toHaveBeenCalledTimes(1);
+      expect(getManagerConfigSpy).toHaveBeenCalledWith(
+        'http://manager.local:18317',
+        'management-key'
+      );
+    } finally {
+      act(() => {
+        renderer?.unmount();
+      });
+      getInfoSpy.mockRestore();
+      getManagerConfigSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
   });
 });

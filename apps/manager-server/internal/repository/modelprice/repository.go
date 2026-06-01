@@ -27,7 +27,7 @@ func New(db *sql.DB) Repository {
 
 func (r *repository) LoadAll(ctx context.Context) (map[string]model.ModelPrice, error) {
 	rows, err := r.db.QueryContext(ctx, `select
-		model, prompt_per_1m, completion_per_1m, cache_per_1m, source, source_model_id, raw_json,
+		model, prompt_per_1m, completion_per_1m, cache_per_1m, cache_read_per_1m, cache_creation_per_1m, source, source_model_id, raw_json,
 		updated_at_ms, synced_at_ms
 		from model_prices order by model`)
 	if err != nil {
@@ -46,6 +46,8 @@ func (r *repository) LoadAll(ctx context.Context) (map[string]model.ModelPrice, 
 			&price.Prompt,
 			&price.Completion,
 			&price.Cache,
+			&price.CacheRead,
+			&price.CacheCreation,
 			&source,
 			&sourceModelID,
 			&rawJSON,
@@ -83,9 +85,9 @@ func (r *repository) ReplaceAll(ctx context.Context, prices map[string]model.Mod
 	}
 
 	stmt, err := tx.PrepareContext(ctx, `insert into model_prices (
-		model, prompt_per_1m, completion_per_1m, cache_per_1m, source, source_model_id,
+		model, prompt_per_1m, completion_per_1m, cache_per_1m, cache_read_per_1m, cache_creation_per_1m, source, source_model_id,
 		raw_json, updated_at_ms, synced_at_ms
-	) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -102,6 +104,8 @@ func (r *repository) ReplaceAll(ctx context.Context, prices map[string]model.Mod
 			price.Prompt,
 			price.Completion,
 			price.Cache,
+			price.CacheRead,
+			price.CacheCreation,
 			nullString(price.Source),
 			nullString(price.SourceModelID),
 			nullString(price.RawJSON),
@@ -127,13 +131,15 @@ func (r *repository) UpsertSynced(ctx context.Context, prices map[string]model.M
 	}()
 
 	stmt, err := tx.PrepareContext(ctx, `insert into model_prices (
-		model, prompt_per_1m, completion_per_1m, cache_per_1m, source, source_model_id,
+		model, prompt_per_1m, completion_per_1m, cache_per_1m, cache_read_per_1m, cache_creation_per_1m, source, source_model_id,
 		raw_json, updated_at_ms, synced_at_ms
-	) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	on conflict(model) do update set
 		prompt_per_1m = excluded.prompt_per_1m,
 		completion_per_1m = excluded.completion_per_1m,
 		cache_per_1m = excluded.cache_per_1m,
+		cache_read_per_1m = excluded.cache_read_per_1m,
+		cache_creation_per_1m = excluded.cache_creation_per_1m,
 		source = excluded.source,
 		source_model_id = excluded.source_model_id,
 		raw_json = excluded.raw_json,
@@ -165,6 +171,8 @@ func (r *repository) UpsertSynced(ctx context.Context, prices map[string]model.M
 			price.Prompt,
 			price.Completion,
 			price.Cache,
+			price.CacheRead,
+			price.CacheCreation,
 			nullString(price.Source),
 			nullString(price.SourceModelID),
 			nullString(price.RawJSON),
@@ -185,7 +193,8 @@ func validateModelPrice(modelID string, price model.ModelPrice) error {
 	if modelID == "" {
 		return errors.New("model is required")
 	}
-	if !validPriceValue(price.Prompt) || !validPriceValue(price.Completion) || !validPriceValue(price.Cache) {
+	if !validPriceValue(price.Prompt) || !validPriceValue(price.Completion) || !validPriceValue(price.Cache) ||
+		!validPriceValue(price.CacheRead) || !validPriceValue(price.CacheCreation) {
 		return fmt.Errorf("invalid model price for %s", modelID)
 	}
 	return nil

@@ -63,6 +63,8 @@ const MANAGER_COLLECTOR_DEFAULT = {
   tlsSkipVerify: false,
 };
 
+const CONFIG_TAB_STORAGE_KEY = 'config-management:tab';
+
 // eslint-disable-next-line react-refresh/only-export-components
 export function getUsageServiceBootstrapToSync({
   serviceBase,
@@ -175,6 +177,37 @@ export function shouldShowMissingManagerAdminKeyError({
   return trigger === 'manual' || !hasManagerConfig;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
+export function resolveManagerCPAConnection({
+  panelHostedByUsageService,
+  managerConfig,
+  currentCPAApiBase,
+  submittedCPAManagementKey,
+  externalManagementKey,
+}: {
+  panelHostedByUsageService: boolean | null;
+  managerConfig: ManagerConfig | null;
+  currentCPAApiBase: string;
+  submittedCPAManagementKey: string;
+  externalManagementKey: string;
+}): ManagerConfig['cpaConnection'] {
+  const trimmedSubmittedKey = submittedCPAManagementKey.trim();
+  const savedConnection = managerConfig?.cpaConnection;
+
+  if (panelHostedByUsageService === true) {
+    return {
+      ...(savedConnection ?? {}),
+      cpaBaseUrl: savedConnection?.cpaBaseUrl || '',
+      managementKey: trimmedSubmittedKey || savedConnection?.managementKey || '',
+    };
+  }
+
+  return {
+    cpaBaseUrl: currentCPAApiBase,
+    managementKey: trimmedSubmittedKey || externalManagementKey.trim(),
+  };
+}
+
 function isManagerAuthErrorCode(code: string): boolean {
   return code === 'invalid_admin_key' || code === 'invalid_management_key';
 }
@@ -188,6 +221,15 @@ function readCommercialModeFromYaml(yamlContent: string): boolean {
     return Boolean((parsed as Record<string, unknown>)['commercial-mode']);
   } catch {
     return false;
+  }
+}
+
+function normalizeYamlForVisualDiff(yamlContent: string): string {
+  try {
+    const doc = parseDocument(yamlContent);
+    return doc.toString({ indent: 2, lineWidth: 120, minContentWidth: 0 });
+  } catch {
+    return yamlContent;
   }
 }
 
@@ -218,12 +260,13 @@ export function ConfigPage() {
   } = useVisualConfig();
 
   const [activeTab, setActiveTab] = useState<ConfigEditorTab>(() => {
-    const saved = localStorage.getItem('config-management:tab');
+    const saved = localStorage.getItem(CONFIG_TAB_STORAGE_KEY);
     if (saved === 'visual' || saved === 'source' || saved === 'manager') return saved;
     return 'visual';
   });
 
   const [content, setContent] = useState('');
+  const [sourceConfigLoaded, setSourceConfigLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -240,6 +283,7 @@ export function ConfigPage() {
   const [managerDirty, setManagerDirty] = useState(false);
   const [managerServiceBase, setManagerServiceBase] = useState('');
   const [managerAdminKey, setManagerAdminKey] = useState('');
+  const [managerCPAManagementKey, setManagerCPAManagementKey] = useState('');
   const [verifiedManagerAdminKey, setVerifiedManagerAdminKey] = useState('');
   const [managerRequestMonitoringEnabled, setManagerRequestMonitoringEnabled] = useState(true);
   const [panelHostedByUsageService, setPanelHostedByUsageService] = useState<boolean | null>(null);
@@ -345,6 +389,7 @@ export function ConfigPage() {
       setDiffModalOpen(false);
       setServerYaml(data);
       setMergedYaml(data);
+      setSourceConfigLoaded(true);
       loadVisualValuesFromYaml(data);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : t('notification.refresh_failed');
@@ -355,8 +400,13 @@ export function ConfigPage() {
   }, [loadVisualValuesFromYaml, t]);
 
   useEffect(() => {
-    loadConfig();
-  }, [loadConfig]);
+    if (activeTab === 'manager') {
+      setLoading(false);
+      return;
+    }
+    if (sourceConfigLoaded) return;
+    void loadConfig();
+  }, [activeTab, loadConfig, sourceConfigLoaded]);
 
   useEffect(() => {
     managerAdminKeyRef.current = managerAdminKey;
@@ -451,6 +501,7 @@ export function ConfigPage() {
       setManagerPollIntervalMs(String(collector.pollIntervalMs || MANAGER_COLLECTOR_DEFAULT.pollIntervalMs));
       setManagerBatchSize(String(collector.batchSize || MANAGER_COLLECTOR_DEFAULT.batchSize));
       setManagerQueryLimit(String(collector.queryLimit || MANAGER_COLLECTOR_DEFAULT.queryLimit));
+      setManagerCPAManagementKey('');
       setManagerDirty(false);
     },
     [managerServiceBase]
@@ -550,7 +601,7 @@ export function ConfigPage() {
     if (activeTab !== 'visual' || !visualParseError) return;
 
     setActiveTab('source');
-    localStorage.setItem('config-management:tab', 'source');
+    localStorage.setItem(CONFIG_TAB_STORAGE_KEY, 'source');
     showNotification(
       t('config_management.visual_mode_unavailable_detail', { message: visualParseError }),
       'error'
@@ -657,16 +708,13 @@ export function ConfigPage() {
           showNotification(t('config_management.manager.poll_interval_retention_error'), 'error');
           return;
         }
-        const cpaConnection = isEmbeddedUsageService
-          ? {
-              ...(managerConfig?.cpaConnection ?? {}),
-              cpaBaseUrl: managerConfig?.cpaConnection?.cpaBaseUrl || apiBase,
-              managementKey: managerConfig?.cpaConnection?.managementKey || managementKey,
-            }
-          : {
-              cpaBaseUrl: currentCPAApiBase,
-              managementKey,
-            };
+        const cpaConnection = resolveManagerCPAConnection({
+          panelHostedByUsageService,
+          managerConfig,
+          currentCPAApiBase,
+          submittedCPAManagementKey: managerCPAManagementKey,
+          externalManagementKey: managementKey,
+        });
         const nextConfig: ManagerConfig = {
           ...(managerConfig ?? {
             cpaConnection,
@@ -697,6 +745,7 @@ export function ConfigPage() {
         );
         applyManagerConfigResponse(response, serviceBase);
         setManagerAdminKey('');
+        setManagerCPAManagementKey('');
         managerAdminKeyRef.current = '';
         setVerifiedManagerAdminKey('');
         setUsageServiceConfig(
@@ -767,6 +816,7 @@ export function ConfigPage() {
     setSaving(true);
     try {
       const latestServerYaml = await configFileApi.fetchConfigYaml();
+      const visualBaseYaml = dirty ? content : latestServerYaml;
 
       if (activeTab !== 'source') {
         const latestDocument = parseDocument(latestServerYaml);
@@ -781,23 +831,34 @@ export function ConfigPage() {
           );
           return;
         }
+
+        if (visualBaseYaml !== latestServerYaml) {
+          const visualBaseDocument = parseDocument(visualBaseYaml);
+          if (visualBaseDocument.errors.length > 0) {
+            showNotification(
+              t('config_management.visual_mode_latest_yaml_invalid', {
+                message:
+                  visualBaseDocument.errors[0]?.message ??
+                  t('config_management.visual_mode_save_blocked'),
+              }),
+              'error'
+            );
+            return;
+          }
+        }
       }
 
-      // In source mode, save exactly what the user edited. In visual mode, materialize visual changes into the latest YAML.
+      // In source mode, save exactly what the user edited. In visual mode, preserve
+      // unsaved source edits as the visual patch base so backend-only fields survive.
       const nextMergedYaml =
-        activeTab === 'source' ? content : applyVisualChangesToYaml(latestServerYaml);
+        activeTab === 'source' ? content : applyVisualChangesToYaml(visualBaseYaml);
 
       // In visual mode, applyVisualChangesToYaml re-serializes YAML via parseDocument → toString,
       // which may reformat comments/whitespace. Normalize the server YAML through the same pipeline
       // so the diff only shows actual value changes, not cosmetic reformatting.
       let diffOriginal = latestServerYaml;
       if (activeTab !== 'source') {
-        try {
-          const doc = parseDocument(latestServerYaml);
-          diffOriginal = doc.toString({ indent: 2, lineWidth: 120, minContentWidth: 0 });
-        } catch {
-          /* keep raw on parse failure */
-        }
+        diffOriginal = normalizeYamlForVisualDiff(latestServerYaml);
       }
 
       if (diffOriginal === nextMergedYaml) {
@@ -832,7 +893,13 @@ export function ConfigPage() {
 
       if (tab === 'manager') {
         setActiveTab(tab);
-        localStorage.setItem('config-management:tab', tab);
+        localStorage.setItem(CONFIG_TAB_STORAGE_KEY, tab);
+        return;
+      }
+
+      if (!sourceConfigLoaded) {
+        setActiveTab(tab);
+        localStorage.setItem(CONFIG_TAB_STORAGE_KEY, tab);
         return;
       }
 
@@ -857,7 +924,7 @@ export function ConfigPage() {
       }
 
       setActiveTab(tab);
-      localStorage.setItem('config-management:tab', tab);
+      localStorage.setItem(CONFIG_TAB_STORAGE_KEY, tab);
     },
     [
       activeTab,
@@ -865,6 +932,7 @@ export function ConfigPage() {
       content,
       loadVisualValuesFromYaml,
       showNotification,
+      sourceConfigLoaded,
       t,
       visualDirty,
     ]
@@ -1208,11 +1276,16 @@ export function ConfigPage() {
           {activeTab === 'manager' ? (
             <ManagerConfigPanel
               managerLoading={managerLoading}
+              managerSaving={managerSaving}
               panelHostedByUsageService={panelHostedByUsageService}
               detectedPanelBase={detectedPanelBase}
               managerRuntimeModeLabel={managerRuntimeModeLabel}
               managerServiceBase={managerServiceBase}
               managerAdminKey={managerAdminKey}
+              managerCPAManagementKey={managerCPAManagementKey}
+              managerHasBoundCPAManagementKey={Boolean(
+                managerConfig?.cpaConnection?.managementKey
+              )}
               currentCPAApiBase={currentCPAApiBase}
               managerBoundCPABase={managerBoundCPABase}
               managerBindingStatus={managerBindingStatus}
@@ -1243,6 +1316,10 @@ export function ConfigPage() {
               onManagerAdminKeyChange={(value) => {
                 setManagerAdminKey(value);
                 setManagerError('');
+              }}
+              onManagerCPAManagementKeyChange={(value) => {
+                setManagerCPAManagementKey(value);
+                setManagerFieldDirty();
               }}
               onRequestMonitoringChange={(value) => {
                 setManagerRequestMonitoringEnabled(value);

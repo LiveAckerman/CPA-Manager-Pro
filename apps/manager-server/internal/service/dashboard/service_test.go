@@ -94,6 +94,12 @@ func TestSummaryAggregatesCostsAndWindows(t *testing.T) {
 		resp.RecentFailures[0].DurationMS == nil || *resp.RecentFailures[0].DurationMS != 200 {
 		t.Fatalf("recent failures = %#v", resp.RecentFailures)
 	}
+	if resp.RecentFailures[0].Source != "user@example.com" ||
+		resp.RecentFailures[0].FailSummary != "upstream rate limit" ||
+		resp.RecentFailures[0].FailStatusCode == nil ||
+		*resp.RecentFailures[0].FailStatusCode != 429 {
+		t.Fatalf("recent failure details = %#v", resp.RecentFailures[0])
+	}
 	if len(resp.TrafficTimeline) != 24 || resp.TrafficTimeline[0].Calls != 3 ||
 		resp.TrafficTimeline[0].Tokens != 1_750_100 ||
 		math.Abs(resp.TrafficTimeline[0].FailureRate-(1.0/3.0)) > 0.000001 {
@@ -113,9 +119,13 @@ func TestSummaryAggregatesCostsAndWindows(t *testing.T) {
 		resp.RequestHealth.Points[7].Tone != "future" {
 		t.Fatalf("request health timeline points = %#v", resp.RequestHealth.Points[:8])
 	}
-	if len(resp.TokenMix) != 4 || resp.TokenMix[0].Key != "input" ||
+	if len(resp.TokenMix) != 6 || resp.TokenMix[0].Key != "input" ||
 		resp.TokenMix[0].Tokens != 1_000_000 {
 		t.Fatalf("token mix = %#v", resp.TokenMix)
+	}
+	if resp.TokenMix[4].Key != "cache_read" || resp.TokenMix[4].Tokens != 0 ||
+		resp.TokenMix[5].Key != "cache_creation" || resp.TokenMix[5].Tokens != 0 {
+		t.Fatalf("token mix cache fields = %#v", resp.TokenMix)
 	}
 	if len(resp.ModelCostRank) != 1 || resp.ModelCostRank[0].Model != "gpt-a" ||
 		resp.ModelCostRank[0].CostShare != 1 {
@@ -125,9 +135,17 @@ func TestSummaryAggregatesCostsAndWindows(t *testing.T) {
 		resp.ChannelHealth[0].Failures != 1 || resp.ChannelHealth[0].Tone != "bad" {
 		t.Fatalf("channel health = %#v", resp.ChannelHealth)
 	}
+	if resp.ChannelHealth[0].Source != "user@example.com" ||
+		resp.ChannelHealth[0].AccountSnapshot != "user@example.com" {
+		t.Fatalf("channel health display snapshots = %#v", resp.ChannelHealth[0])
+	}
 	if len(resp.FailureSources) != 1 || resp.FailureSources[0].SourceHash != "source-hash" ||
 		resp.FailureSources[0].Failures != 1 {
 		t.Fatalf("failure sources = %#v", resp.FailureSources)
+	}
+	if resp.FailureSources[0].Source != "user@example.com" ||
+		resp.FailureSources[0].AccountSnapshot != "user@example.com" {
+		t.Fatalf("failure source display snapshots = %#v", resp.FailureSources[0])
 	}
 }
 
@@ -215,6 +233,7 @@ func dashboardEvent(
 		Source:          "user@example.com",
 		SourceHash:      "source-hash",
 		APIKeyHash:      "api-key-hash",
+		AccountSnapshot: "user@example.com",
 		InputTokens:     inputTokens,
 		OutputTokens:    outputTokens,
 		ReasoningTokens: reasoningTokens,
@@ -223,6 +242,8 @@ func dashboardEvent(
 		TotalTokens:     totalTokens,
 		LatencyMS:       latencyMS,
 		Failed:          failed,
+		FailStatusCode:  429,
+		FailSummary:     "upstream rate limit",
 		CreatedAtMS:     timestampMS,
 	}
 }

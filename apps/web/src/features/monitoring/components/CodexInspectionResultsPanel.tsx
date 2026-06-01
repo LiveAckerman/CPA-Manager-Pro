@@ -4,6 +4,7 @@ import {
   type CodexInspectionAction,
   type CodexInspectionResultItem,
   type CodexInspectionRunResult,
+  isExecutableAction,
 } from '@/features/monitoring/codexInspection';
 import {
   ACTION_FILTERS,
@@ -18,7 +19,7 @@ import styles from '../CodexInspectionPage.module.scss';
 type CodexInspectionResultsPanelProps = {
   result: CodexInspectionRunResult | null;
   filteredResults: CodexInspectionResultItem[];
-  actionableResults: CodexInspectionResultItem[];
+  suggestedResults: CodexInspectionResultItem[];
   pendingActionCount: number;
   filterCounts: Record<ActionFilter, number>;
   actionFilter: ActionFilter;
@@ -36,12 +37,13 @@ const actionToneClass: Record<CodexInspectionAction, string> = {
   delete: styles.actionDelete,
   disable: styles.actionDisable,
   enable: styles.actionEnable,
+  reauth: styles.actionReauth,
 };
 
 export function CodexInspectionResultsPanel({
   result,
   filteredResults,
-  actionableResults,
+  suggestedResults,
   pendingActionCount,
   filterCounts,
   actionFilter,
@@ -155,14 +157,20 @@ export function CodexInspectionResultsPanel({
                         </span>
                       </td>
                       <td>
-                        <Button
-                          size="sm"
-                          variant={item.action === 'delete' ? 'danger' : 'secondary'}
-                          onClick={() => onExecuteSingle(item)}
-                          disabled={isInspectionInFlight || executing}
-                        >
-                          {formatActionLabel(item.action, t)}
-                        </Button>
+                        {isExecutableAction(item) ? (
+                          <Button
+                            size="sm"
+                            variant={item.action === 'delete' ? 'danger' : 'secondary'}
+                            onClick={() => onExecuteSingle(item)}
+                            disabled={isInspectionInFlight || executing}
+                          >
+                            {formatActionLabel(item.action, t)}
+                          </Button>
+                        ) : (
+                          <span className={styles.primaryReason}>
+                            {t('monitoring.codex_inspection_manual_required')}
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))
@@ -170,7 +178,7 @@ export function CodexInspectionResultsPanel({
                   <tr>
                     <td colSpan={6}>
                       <div className={styles.emptyBlockSmall}>
-                        {actionableResults.length === 0
+                        {suggestedResults.length === 0
                           ? t('monitoring.codex_inspection_no_pending_actions')
                           : t('monitoring.codex_inspection_no_pending_actions')}
                       </div>

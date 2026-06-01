@@ -5,10 +5,18 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { AuthSessionMode, AuthState, LoginCredentials, ConnectionStatus } from '@/types';
+import type {
+  AuthSessionMode,
+  AuthState,
+  LoginCredentials,
+  LoginResult,
+  RestoreSessionResult,
+  ConnectionStatus,
+} from '@/types';
 import { STORAGE_KEY_AUTH } from '@/utils/constants';
 import { obfuscatedStorage } from '@/services/storage/secureStorage';
 import { apiClient } from '@/services/api/client';
+import { usageServiceApi } from '@/services/api/usageService';
 import { useConfigStore } from './useConfigStore';
 import { useModelsStore } from './useModelsStore';
 import { useUsageServiceStore } from './useUsageServiceStore';
@@ -21,10 +29,10 @@ interface AuthStoreState extends AuthState {
   connectionError: string | null;
 
   // 操作
-  login: (credentials: LoginCredentials) => Promise<void>;
+  login: (credentials: LoginCredentials) => Promise<LoginResult>;
   logout: () => void;
   checkAuth: () => Promise<boolean>;
-  restoreSession: (options?: RestoreSessionOptions) => Promise<boolean>;
+  restoreSession: (options?: RestoreSessionOptions) => Promise<RestoreSessionResult>;
   updateServerVersion: (version: string | null, buildDate?: string | null) => void;
   updateConnectionStatus: (status: ConnectionStatus, error?: string | null) => void;
 }
@@ -34,7 +42,7 @@ interface RestoreSessionOptions {
   expectedPanelBase?: string;
 }
 
-let restoreSessionPromise: Promise<boolean> | null = null;
+let restoreSessionPromise: Promise<RestoreSessionResult> | null = null;
 
 const sessionMatchesExpectedRuntime = ({
   expectedMode,
@@ -124,12 +132,15 @@ export const useAuthStore = create<AuthStoreState>()(
 
           if (wasLoggedIn && resolvedBase && resolvedKey) {
             try {
-              await get().login({
+              const restoredSessionMode = options?.expectedMode ?? (sessionMode || undefined);
+              const result = await get().login({
                 apiBase: resolvedBase,
                 managementKey: resolvedKey,
-                rememberPassword: resolvedRememberPassword
+                rememberPassword: resolvedRememberPassword,
+                sessionMode: restoredSessionMode,
+                sessionPanelBase: options?.expectedPanelBase || get().sessionPanelBase,
               });
-              return true;
+              return result.recoveryMode ? result : {};
             } catch (error) {
               console.warn('Auto login failed:', error);
               return false;
@@ -147,6 +158,28 @@ export const useAuthStore = create<AuthStoreState>()(
         const apiBase = normalizeApiBase(credentials.apiBase);
         const managementKey = credentials.managementKey.trim();
         const rememberPassword = credentials.rememberPassword ?? get().rememberPassword ?? false;
+        const sessionMode = credentials.sessionMode ?? get().sessionMode;
+        const sessionPanelBase = normalizeApiBase(credentials.sessionPanelBase || get().sessionPanelBase);
+
+        const markAuthenticated = (result: LoginResult = {}) => {
+          apiClient.setConfig({ apiBase, managementKey });
+          set({
+            isAuthenticated: true,
+            apiBase,
+            managementKey,
+            rememberPassword,
+            sessionMode,
+            sessionPanelBase,
+            connectionStatus: 'connected',
+            connectionError: null
+          });
+          if (rememberPassword) {
+            localStorage.setItem('isLoggedIn', 'true');
+          } else {
+            localStorage.removeItem('isLoggedIn');
+          }
+          return result;
+        };
 
         try {
           set({ connectionStatus: 'connecting' });
@@ -159,24 +192,29 @@ export const useAuthStore = create<AuthStoreState>()(
           });
 
           // 测试连接 - 获取配置
-          await useConfigStore.getState().fetchConfig(undefined, true);
+          try {
+            await useConfigStore.getState().fetchConfig(undefined, true);
+          } catch (error) {
+            if (sessionMode !== 'manager_embedded') {
+              throw error;
+            }
+            await usageServiceApi.getManagerConfig(apiBase, managementKey);
+            useConfigStore.getState().clearCache();
+            useUsageServiceStore.getState().setUsageServiceConfig(
+              {
+                enabled: true,
+                serviceBase: apiBase,
+              },
+              {
+                panelBase: sessionPanelBase || apiBase,
+                panelHostMode: 'manager_embedded',
+              }
+            );
+            return markAuthenticated({ recoveryMode: 'manager_config' });
+          }
 
           // 登录成功
-          set({
-            isAuthenticated: true,
-            apiBase,
-            managementKey,
-            rememberPassword,
-            sessionMode: credentials.sessionMode ?? get().sessionMode,
-            sessionPanelBase: normalizeApiBase(credentials.sessionPanelBase || get().sessionPanelBase),
-            connectionStatus: 'connected',
-            connectionError: null
-          });
-          if (rememberPassword) {
-            localStorage.setItem('isLoggedIn', 'true');
-          } else {
-            localStorage.removeItem('isLoggedIn');
-          }
+          return markAuthenticated();
         } catch (error: unknown) {
           const message =
             error instanceof Error

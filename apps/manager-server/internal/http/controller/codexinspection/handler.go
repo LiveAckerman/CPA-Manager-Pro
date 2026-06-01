@@ -2,6 +2,7 @@ package codexinspection
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -34,11 +35,7 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 			TriggerKey:  "manual",
 		})
 		if err != nil {
-			status := http.StatusInternalServerError
-			if strings.Contains(err.Error(), "already running") {
-				status = http.StatusConflict
-			}
-			response.Error(w, status, err)
+			response.Error(w, codexInspectionErrorStatus(err), err)
 			return
 		}
 		response.JSON(w, http.StatusOK, result)
@@ -64,11 +61,12 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 			response.MethodNotAllowed(w)
 			return
 		}
-		if r.Method != http.MethodGet {
-			response.MethodNotAllowed(w)
-			return
-		}
 		idRaw := strings.TrimPrefix(path, "/v0/management/codex-inspection/runs/")
+		actionPath := false
+		if strings.HasSuffix(idRaw, "/actions") {
+			actionPath = true
+			idRaw = strings.TrimSuffix(idRaw, "/actions")
+		}
 		id, err := strconv.ParseInt(idRaw, 10, 64)
 		if err != nil || id <= 0 {
 			if err == nil {
@@ -77,15 +75,50 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusBadRequest, err)
 			return
 		}
+		if actionPath {
+			if r.Method != http.MethodPost {
+				response.MethodNotAllowed(w)
+				return
+			}
+			var req codexsvc.ExecuteActionsRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				response.Error(w, http.StatusBadRequest, err)
+				return
+			}
+			result, err := h.App.CodexInspectionService.ExecuteManualActions(r.Context(), id, req)
+			if err != nil {
+				response.Error(w, codexInspectionErrorStatus(err), err)
+				return
+			}
+			response.JSON(w, http.StatusOK, result)
+			return
+		}
+		if r.Method != http.MethodGet {
+			response.MethodNotAllowed(w)
+			return
+		}
 		detail, err := h.App.CodexInspectionService.GetRun(r.Context(), id)
 		if err != nil {
-			status := http.StatusInternalServerError
-			if err == codexsvc.ErrRunNotFound {
-				status = http.StatusNotFound
-			}
-			response.Error(w, status, err)
+			response.Error(w, codexInspectionErrorStatus(err), err)
 			return
 		}
 		response.JSON(w, http.StatusOK, detail)
+	}
+}
+
+func codexInspectionErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, codexsvc.ErrRunNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, codexsvc.ErrRunAlreadyActive),
+		errors.Is(err, codexsvc.ErrRunNotCompleted):
+		return http.StatusConflict
+	case errors.Is(err, codexsvc.ErrNotConfigured):
+		return http.StatusPreconditionFailed
+	case errors.Is(err, codexsvc.ErrActionIDsRequired),
+		errors.Is(err, codexsvc.ErrNoActionableResults):
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
 	}
 }

@@ -12,11 +12,17 @@ import {
 import { useAuthStore, useConfigStore, useModelsStore } from '@/stores';
 import { apiKeysApi, providersApi, authFilesApi } from '@/services/api';
 import { logsApi, type ErrorLogFile } from '@/services/api/logs';
-import { usageServiceApi, type ApiKeyAlias, type UsageServiceStatus } from '@/services/api/usageService';
+import {
+  usageServiceApi,
+  type ApiKeyAlias,
+  type UsageServiceStatus,
+} from '@/services/api/usageService';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { loadMonitoringMetaPayload } from '@/features/monitoring/services/monitoringMetaService';
 import { buildMonitoringAuthMetaMap } from '@/features/monitoring/model/authMeta';
+import { buildAuthFileMapFromMeta } from '@/features/monitoring/model/sourceDisplay';
 import type { MonitoringChannelMeta } from '@/features/monitoring/model/types';
+import { buildSourceInfoMap } from '@/utils/sourceResolver';
 import type { AuthFileItem } from '@/types/authFile';
 import { VersionCard } from './components/VersionCard';
 import { UsageMetricsCard } from './components/UsageMetricsCard';
@@ -211,6 +217,18 @@ export function DashboardPage() {
     () => buildMonitoringAuthMetaMap(displayMeta.authFiles),
     [displayMeta.authFiles]
   );
+  const authFileMap = useMemo(() => buildAuthFileMapFromMeta(authMetaMap), [authMetaMap]);
+  const sourceInfoMap = useMemo(
+    () =>
+      buildSourceInfoMap({
+        geminiApiKeys: config?.geminiApiKeys || [],
+        claudeApiKeys: config?.claudeApiKeys || [],
+        codexApiKeys: config?.codexApiKeys || [],
+        vertexApiKeys: config?.vertexApiKeys || [],
+        openaiCompatibility: config?.openaiCompatibility || [],
+      }),
+    [config]
+  );
   const channelByAuthIndex = useMemo(() => {
     const map = new Map<string, MonitoringChannelMeta>();
     displayMeta.channels.forEach((channel) => {
@@ -247,13 +265,14 @@ export function DashboardPage() {
     setCollectorLoading(true);
     setErrorLogsLoading(true);
 
-    const [collectorResult, logsResult, managerConfigResult, metaResult, aliasesResult] = await Promise.allSettled([
-      usageServiceApi.getStatus(usageServiceBase, managementKey),
-      logsApi.fetchErrorLogs(),
-      usageServiceApi.getManagerConfig(usageServiceBase, managementKey),
-      loadMonitoringMetaPayload(config),
-      usageServiceApi.getApiKeyAliases(usageServiceBase, managementKey),
-    ]);
+    const [collectorResult, logsResult, managerConfigResult, metaResult, aliasesResult] =
+      await Promise.allSettled([
+        usageServiceApi.getStatus(usageServiceBase, managementKey),
+        logsApi.fetchErrorLogs(),
+        usageServiceApi.getManagerConfig(usageServiceBase, managementKey),
+        loadMonitoringMetaPayload(config),
+        usageServiceApi.getApiKeyAliases(usageServiceBase, managementKey),
+      ]);
 
     if (collectorResult.status === 'fulfilled') {
       setCollectorStatus(collectorResult.value);
@@ -442,7 +461,11 @@ export function DashboardPage() {
             <span className={styles.date}>{formattedDate}</span>
           </div>
           <div className={styles.headerActions}>
-            <button className={styles.actionBtn} onClick={refreshDashboard} title={t('common.refresh')}>
+            <button
+              className={styles.actionBtn}
+              onClick={refreshDashboard}
+              title={t('common.refresh')}
+            >
               <IconRefreshCw size={16} />
               <span>{t('common.refresh')}</span>
             </button>
@@ -476,9 +499,7 @@ export function DashboardPage() {
       {/* 3. Today's Overview (Metrics Cards) */}
       {usageSummary.enabled && (
         <section className={styles.metricsRow}>
-          <h2 className={styles.sectionTitle}>
-            {t('dashboard.today_overview_usage_service')}
-          </h2>
+          <h2 className={styles.sectionTitle}>{t('dashboard.today_overview_usage_service')}</h2>
           <UsageMetricsCard
             summary={usageSummary.summary}
             topModels={usageSummary.topModels}
@@ -522,6 +543,8 @@ export function DashboardPage() {
             recentFailures={usageSummary.recentFailures}
             channelHealth={usageSummary.channelHealth}
             authMetaMap={authMetaMap}
+            authFileMap={authFileMap}
+            sourceInfoMap={sourceInfoMap}
             channelByAuthIndex={channelByAuthIndex}
             apiKeyAliasMap={apiKeyAliasMap}
           />
@@ -575,8 +598,12 @@ export function DashboardPage() {
                 </span>
               </div>
               <div className={styles.configItem}>
-                <span className={styles.configLabel}>{t('basic_settings.logging_to_file_enable')}</span>
-                <span className={`${styles.configValue} ${config.loggingToFile ? styles.on : styles.off}`}>
+                <span className={styles.configLabel}>
+                  {t('basic_settings.logging_to_file_enable')}
+                </span>
+                <span
+                  className={`${styles.configValue} ${config.loggingToFile ? styles.on : styles.off}`}
+                >
                   {config.loggingToFile ? t('common.enabled') : t('common.disabled')}
                 </span>
               </div>

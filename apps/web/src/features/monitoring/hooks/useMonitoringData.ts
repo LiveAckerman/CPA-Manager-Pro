@@ -21,9 +21,12 @@ import {
 } from '../model/chartBuilders';
 import {
   buildAnalyticsFilters,
+  buildAccountRowsFromAnalytics,
+  buildApiKeyRowsFromAnalytics,
   buildChannelRowsFromAnalytics,
   buildFailureRowsFromAnalytics,
   buildFailureSourceRowsFromAnalytics,
+  buildFilterOptionsFromAnalytics,
   buildHourlyDistributionFromAnalytics,
   buildModelRowsFromAnalytics,
   buildModelShareRowsFromAnalytics,
@@ -35,13 +38,17 @@ import {
 } from '../model/analyticsAdapters';
 import { buildEventRows } from '../model/eventRows';
 import {
+  buildAccountRows,
+  buildApiKeyRows,
   buildMonitoringSummary,
   buildRangeFilteredRows,
+  buildScopeFilteredRows,
   shouldIncludeInStats,
 } from '../model/rowBuilders';
 import type {
   MonitoringAuthMeta,
   MonitoringChannelMeta,
+  MonitoringFilterOptions,
   MonitoringMetadata,
   UseMonitoringDataParams,
   UseMonitoringDataReturn,
@@ -83,10 +90,13 @@ export {
   buildApiKeyRows,
   buildMonitoringSummary,
   buildRangeFilteredRows,
+  buildScopeFilteredRows,
   buildRealtimeMonitorRows,
 } from '../model/rowBuilders';
 
 const MONITORING_EVENTS_PAGE_LIMIT = 500;
+const MONITORING_PRESENTATION_CACHE_LIMIT = 24;
+const EMPTY_MONITORING_ANALYTICS_EVENT_ROWS: MonitoringAnalyticsEventRow[] = [];
 
 interface MonitoringEventsPageState {
   scopeKey: string;
@@ -95,6 +105,38 @@ interface MonitoringEventsPageState {
   hasMore: boolean;
   loadingMore: boolean;
   lastPageKey: string;
+}
+
+export type MonitoringPresentationSnapshot = Pick<
+  UseMonitoringDataReturn,
+  | 'summary'
+  | 'timeline'
+  | 'timelineGranularity'
+  | 'hourlyDistribution'
+  | 'modelShareRows'
+  | 'channelRows'
+  | 'modelRows'
+  | 'failureSourceRows'
+  | 'taskBuckets'
+  | 'recentFailures'
+  | 'accountRows'
+  | 'apiKeyRows'
+  | 'filterOptions'
+  | 'filteredRows'
+  | 'eventsHasMore'
+  | 'eventsLoadingMore'
+  | 'lastRefreshedAt'
+>;
+
+export interface MonitoringPresentationSnapshotResolution {
+  snapshot: MonitoringPresentationSnapshot;
+  hasPresentationSnapshot: boolean;
+  usingSnapshotFallback: boolean;
+}
+
+interface MonitoringPresentationSnapshotStore {
+  cachedSnapshots: Map<string, MonitoringPresentationSnapshot>;
+  lastStableSnapshot: MonitoringPresentationSnapshot | null;
 }
 
 const createEventsPageState = (scopeKey = ''): MonitoringEventsPageState => ({
@@ -157,6 +199,71 @@ export const mergeMonitoringEventsPageItems = (
   return mergeAnalyticsEventItems(pageItems, previousItems);
 };
 
+const uniqueOptionValues = (values: Array<string | null | undefined>) =>
+  Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean))).sort(
+    (left, right) => left.localeCompare(right)
+  );
+
+export const resolveMonitoringDisplayEventItems = ({
+  analyticsData,
+  currentPageItems,
+  eventsPageItems,
+  eventsBeforeMs,
+  dataStale,
+}: {
+  analyticsData: { events?: { items: MonitoringAnalyticsEventRow[] } } | null;
+  currentPageItems: MonitoringAnalyticsEventRow[] | null;
+  eventsPageItems: MonitoringAnalyticsEventRow[];
+  eventsBeforeMs: number | null;
+  dataStale: boolean;
+}): MonitoringAnalyticsEventRow[] => {
+  if (dataStale) {
+    return eventsPageItems.length > 0
+      ? eventsPageItems
+      : (analyticsData?.events?.items ?? EMPTY_MONITORING_ANALYTICS_EVENT_ROWS);
+  }
+
+  if (!currentPageItems) {
+    return eventsPageItems;
+  }
+
+  const existingEventHashes = new Set(eventsPageItems.map((item) => item.event_hash));
+  if (currentPageItems.every((item) => existingEventHashes.has(item.event_hash))) {
+    return eventsPageItems;
+  }
+
+  return mergeMonitoringEventsPageItems(eventsPageItems, currentPageItems, eventsBeforeMs);
+};
+
+export const resolveMonitoringPresentationSnapshot = ({
+  computedSnapshot,
+  scopeKey,
+  dataStale,
+  cachedSnapshots,
+  lastStableSnapshot,
+}: {
+  computedSnapshot: MonitoringPresentationSnapshot;
+  scopeKey: string;
+  dataStale: boolean;
+  cachedSnapshots: ReadonlyMap<string, MonitoringPresentationSnapshot>;
+  lastStableSnapshot: MonitoringPresentationSnapshot | null;
+}): MonitoringPresentationSnapshotResolution => {
+  if (!dataStale) {
+    return {
+      snapshot: computedSnapshot,
+      hasPresentationSnapshot: true,
+      usingSnapshotFallback: false,
+    };
+  }
+
+  const snapshot = cachedSnapshots.get(scopeKey) ?? lastStableSnapshot;
+  return {
+    snapshot: snapshot ?? computedSnapshot,
+    hasPresentationSnapshot: Boolean(snapshot),
+    usingSnapshotFallback: Boolean(snapshot),
+  };
+};
+
 export function useMonitoringData({
   usage,
   config,
@@ -176,6 +283,11 @@ export function useMonitoringData({
   const [eventsPageState, setEventsPageState] = useState<MonitoringEventsPageState>(() =>
     createEventsPageState()
   );
+  const [presentationSnapshotStore, setPresentationSnapshotStore] =
+    useState<MonitoringPresentationSnapshotStore>(() => ({
+      cachedSnapshots: new Map(),
+      lastStableSnapshot: null,
+    }));
 
   const analyticsBounds = useMemo(() => {
     const bounds = getRangeBounds(timeRange, analyticsNowMs, customTimeRange);
@@ -321,6 +433,7 @@ export function useMonitoringData({
     fromMs: analyticsBounds?.startMs,
     toMs: analyticsBounds?.endMs,
     nowMs: analyticsNowMs,
+    dataScopeKey: eventsScopeKey,
     searchQuery,
     searchApiKeyHash,
     filters: analyticsFilters,
@@ -332,6 +445,9 @@ export function useMonitoringData({
       channel_share: true,
       model_stats: true,
       failure_sources: true,
+      account_stats: true,
+      api_key_stats: true,
+      filter_options: true,
       task_buckets: true,
       recent_failures: 8,
       events_page: { limit: MONITORING_EVENTS_PAGE_LIMIT, before_ms: eventsBeforeMs },
@@ -340,9 +456,28 @@ export function useMonitoringData({
     throttleMs: 1_000,
   });
   const analyticsData = analytics.data;
+  const currentAnalyticsData = analytics.dataStale ? null : analyticsData;
+  const displayEventItems = useMemo(
+    () =>
+      resolveMonitoringDisplayEventItems({
+        analyticsData,
+        currentPageItems: currentAnalyticsData?.events?.items ?? null,
+        eventsPageItems: eventItems,
+        eventsBeforeMs,
+        dataStale: analytics.dataStale,
+      }),
+    [
+      analytics.dataStale,
+      analyticsData,
+      currentAnalyticsData?.events?.items,
+      eventItems,
+      eventsBeforeMs,
+    ]
+  );
+  const displayEventsHasMore = currentAnalyticsData?.events?.has_more ?? eventsHasMore;
 
   useEffect(() => {
-    const page = analyticsData?.events;
+    const page = currentAnalyticsData?.events;
     if (!page) return;
     const requestBeforeMs = eventsBeforeMs;
     const pageKey = buildEventsPageKey(
@@ -356,9 +491,7 @@ export function useMonitoringData({
       if (cancelled) return;
       setEventsPageState((previous) => {
         const base =
-          previous.scopeKey === eventsScopeKey
-            ? previous
-            : createEventsPageState(eventsScopeKey);
+          previous.scopeKey === eventsScopeKey ? previous : createEventsPageState(eventsScopeKey);
         if (base.lastPageKey === pageKey) return base;
         return {
           scopeKey: eventsScopeKey,
@@ -373,7 +506,7 @@ export function useMonitoringData({
     return () => {
       cancelled = true;
     };
-  }, [analyticsData?.events, eventsScopeKey, eventsBeforeMs]);
+  }, [currentAnalyticsData?.events, eventsScopeKey, eventsBeforeMs]);
 
   useEffect(() => {
     if (analytics.error) {
@@ -392,18 +525,16 @@ export function useMonitoringData({
 
   const loadMoreEvents = useCallback(() => {
     if (analytics.loading || eventsLoadingMore || !eventsHasMore) return;
-    const nextBeforeMs = analyticsData?.events?.next_before_ms;
+    const nextBeforeMs = currentAnalyticsData?.events?.next_before_ms;
     if (!nextBeforeMs) return;
     setEventsPageState((previous) => {
       const base =
-        previous.scopeKey === eventsScopeKey
-          ? previous
-          : createEventsPageState(eventsScopeKey);
+        previous.scopeKey === eventsScopeKey ? previous : createEventsPageState(eventsScopeKey);
       if (base.loadingMore) return base;
       return { ...base, beforeMs: nextBeforeMs, loadingMore: true };
     });
   }, [
-    analyticsData?.events?.next_before_ms,
+    currentAnalyticsData?.events?.next_before_ms,
     analytics.loading,
     eventsScopeKey,
     eventsHasMore,
@@ -412,7 +543,7 @@ export function useMonitoringData({
 
   const allRows = useMemo(() => {
     const details = analyticsData
-      ? buildUsageDetailsFromAnalyticsEvents(eventItems)
+      ? buildUsageDetailsFromAnalyticsEvents(displayEventItems)
       : collectUsageDetailsWithEndpoint(usage);
     return buildEventRows(
       details,
@@ -429,100 +560,280 @@ export function useMonitoringData({
     authMetaMap,
     channelByAuthIndex,
     analyticsData,
-    eventItems,
+    displayEventItems,
     modelPrices,
     sourceInfoMap,
     usage,
   ]);
 
-  const filteredRows = useMemo(
+  const rangeFilteredRows = useMemo(
     () =>
       buildRangeFilteredRows(allRows, timeRange, customTimeRange, searchQuery, searchApiKeyHash),
     [allRows, customTimeRange, searchApiKeyHash, searchQuery, timeRange]
+  );
+  const filteredRows = useMemo(
+    () => buildScopeFilteredRows(rangeFilteredRows, scopeFilters),
+    [rangeFilteredRows, scopeFilters]
   );
   const statsRows = useMemo(() => filteredRows.filter(shouldIncludeInStats), [filteredRows]);
 
   const summary = useMemo(
     () =>
-      analyticsData?.summary
-        ? buildSummaryFromAnalytics(analyticsData.summary)
+      currentAnalyticsData?.summary
+        ? buildSummaryFromAnalytics(currentAnalyticsData.summary)
         : buildMonitoringSummary(statsRows),
-    [analyticsData, statsRows]
+    [currentAnalyticsData, statsRows]
   );
   const timelineData = useMemo(
     () =>
-      analyticsData?.timeline
+      currentAnalyticsData?.timeline
         ? {
             granularity:
-              analyticsData.granularity === 'hour' ? ('hour' as const) : ('day' as const),
-            points: buildTimelineFromAnalytics(analyticsData.timeline, analyticsData.granularity),
+              currentAnalyticsData.granularity === 'hour' ? ('hour' as const) : ('day' as const),
+            points: buildTimelineFromAnalytics(
+              currentAnalyticsData.timeline,
+              currentAnalyticsData.granularity
+            ),
           }
         : buildTimeline(statsRows, timeRange, customTimeRange),
-    [analyticsData, customTimeRange, statsRows, timeRange]
+    [currentAnalyticsData, customTimeRange, statsRows, timeRange]
   );
   const hourlyDistribution = useMemo(
     () =>
-      analyticsData?.hourly_distribution
-        ? buildHourlyDistributionFromAnalytics(analyticsData.hourly_distribution)
+      currentAnalyticsData?.hourly_distribution
+        ? buildHourlyDistributionFromAnalytics(currentAnalyticsData.hourly_distribution)
         : buildHourlyDistribution(statsRows),
-    [analyticsData, statsRows]
+    [currentAnalyticsData, statsRows]
   );
   const modelShareRows = useMemo(
     () =>
-      analyticsData?.model_share
-        ? buildModelShareRowsFromAnalytics(analyticsData.model_share, analyticsData.model_stats)
+      currentAnalyticsData?.model_share
+        ? buildModelShareRowsFromAnalytics(
+            currentAnalyticsData.model_share,
+            currentAnalyticsData.model_stats
+          )
         : buildModelShareRows(statsRows),
-    [analyticsData, statsRows]
+    [currentAnalyticsData, statsRows]
   );
   const channelRows = useMemo(
     () =>
-      analyticsData?.channel_share
-        ? buildChannelRowsFromAnalytics(analyticsData.channel_share, authMetaMap, channelByAuthIndex)
+      currentAnalyticsData?.channel_share
+        ? buildChannelRowsFromAnalytics(
+            currentAnalyticsData.channel_share,
+            authMetaMap,
+            authFileMap,
+            sourceInfoMap,
+            channelByAuthIndex
+          )
         : buildChannelRows(statsRows),
-    [analyticsData, authMetaMap, channelByAuthIndex, statsRows]
+    [currentAnalyticsData, authFileMap, authMetaMap, channelByAuthIndex, sourceInfoMap, statsRows]
   );
   const modelRows = useMemo(
     () =>
-      analyticsData?.model_stats
-        ? buildModelRowsFromAnalytics(analyticsData.model_stats)
+      currentAnalyticsData?.model_stats
+        ? buildModelRowsFromAnalytics(currentAnalyticsData.model_stats)
         : buildModelRows(statsRows),
-    [analyticsData, statsRows]
+    [currentAnalyticsData, statsRows]
   );
   const failureSourceRows = useMemo(
     () =>
-      analyticsData?.failure_sources
+      currentAnalyticsData?.failure_sources
         ? buildFailureSourceRowsFromAnalytics(
-            analyticsData.failure_sources,
+            currentAnalyticsData.failure_sources,
             authMetaMap,
+            authFileMap,
+            sourceInfoMap,
             channelByAuthIndex
           )
         : buildFailureSourceRows(statsRows),
-    [analyticsData, authMetaMap, channelByAuthIndex, statsRows]
+    [currentAnalyticsData, authFileMap, authMetaMap, channelByAuthIndex, sourceInfoMap, statsRows]
   );
   const taskBuckets = useMemo(
     () =>
-      analyticsData?.task_buckets
+      currentAnalyticsData?.task_buckets
         ? buildTaskBucketsFromAnalytics(
-            analyticsData.task_buckets,
+            currentAnalyticsData.task_buckets,
             authMetaMap,
             authFileMap,
             sourceInfoMap,
             channelByAuthIndex
           )
         : buildTaskBuckets(statsRows),
-    [analyticsData, authFileMap, authMetaMap, channelByAuthIndex, sourceInfoMap, statsRows]
+    [currentAnalyticsData, authFileMap, authMetaMap, channelByAuthIndex, sourceInfoMap, statsRows]
   );
   const recentFailures = useMemo(
     () =>
-      analyticsData?.recent_failures
+      currentAnalyticsData?.recent_failures
         ? buildFailureRowsFromAnalytics(
-            analyticsData.recent_failures,
+            currentAnalyticsData.recent_failures,
             authMetaMap,
+            authFileMap,
+            sourceInfoMap,
             channelByAuthIndex
           )
         : buildFailureRows(statsRows),
-    [analyticsData, authMetaMap, channelByAuthIndex, statsRows]
+    [currentAnalyticsData, authFileMap, authMetaMap, channelByAuthIndex, sourceInfoMap, statsRows]
   );
+  const accountRows = useMemo(
+    () =>
+      currentAnalyticsData?.account_stats
+        ? buildAccountRowsFromAnalytics(
+            currentAnalyticsData.account_stats,
+            authMetaMap,
+            authFileMap,
+            sourceInfoMap,
+            channelByAuthIndex
+          )
+        : buildAccountRows(filteredRows),
+    [currentAnalyticsData, authFileMap, authMetaMap, channelByAuthIndex, filteredRows, sourceInfoMap]
+  );
+  const apiKeyRows = useMemo(
+    () =>
+      currentAnalyticsData?.api_key_stats
+        ? buildApiKeyRowsFromAnalytics(
+            currentAnalyticsData.api_key_stats,
+            authMetaMap,
+            authFileMap,
+            sourceInfoMap,
+            channelByAuthIndex,
+            apiKeyDisplayMap
+          )
+        : buildApiKeyRows(filteredRows),
+    [
+      apiKeyDisplayMap,
+      currentAnalyticsData,
+      authFileMap,
+      authMetaMap,
+      channelByAuthIndex,
+      filteredRows,
+      sourceInfoMap,
+    ]
+  );
+  const fallbackFilterOptions = useMemo<MonitoringFilterOptions>(
+    () => ({
+      accountRows: buildAccountRows(rangeFilteredRows),
+      apiKeyRows: buildApiKeyRows(rangeFilteredRows),
+      providers: uniqueOptionValues(rangeFilteredRows.map((row) => row.provider)),
+      models: uniqueOptionValues(rangeFilteredRows.map((row) => row.model)),
+      channels: uniqueOptionValues(rangeFilteredRows.map((row) => row.channel)),
+    }),
+    [rangeFilteredRows]
+  );
+  const analyticsFilterOptions = currentAnalyticsData?.filter_options;
+  const filterOptions = useMemo(
+    () =>
+      analyticsFilterOptions
+        ? buildFilterOptionsFromAnalytics(
+            analyticsFilterOptions,
+            authMetaMap,
+            authFileMap,
+            sourceInfoMap,
+            channelByAuthIndex,
+            apiKeyDisplayMap
+          )
+        : fallbackFilterOptions,
+    [
+      apiKeyDisplayMap,
+      authFileMap,
+      authMetaMap,
+      channelByAuthIndex,
+      analyticsFilterOptions,
+      fallbackFilterOptions,
+      sourceInfoMap,
+    ]
+  );
+
+  const computedPresentationSnapshot = useMemo<MonitoringPresentationSnapshot>(
+    () => ({
+      summary,
+      timeline: timelineData.points,
+      timelineGranularity: timelineData.granularity,
+      hourlyDistribution,
+      modelShareRows,
+      channelRows,
+      modelRows,
+      failureSourceRows,
+      taskBuckets,
+      recentFailures,
+      accountRows,
+      apiKeyRows,
+      filterOptions,
+      filteredRows,
+      eventsHasMore: displayEventsHasMore,
+      eventsLoadingMore,
+      lastRefreshedAt: analytics.lastRefreshedAt,
+    }),
+    [
+      analytics.lastRefreshedAt,
+      accountRows,
+      apiKeyRows,
+      channelRows,
+      displayEventsHasMore,
+      eventsLoadingMore,
+      failureSourceRows,
+      filterOptions,
+      filteredRows,
+      hourlyDistribution,
+      modelRows,
+      modelShareRows,
+      recentFailures,
+      summary,
+      taskBuckets,
+      timelineData.granularity,
+      timelineData.points,
+    ]
+  );
+
+  useEffect(() => {
+    if (analytics.dataStale) return;
+
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setPresentationSnapshotStore((previous) => {
+        if (
+          previous.lastStableSnapshot === computedPresentationSnapshot &&
+          previous.cachedSnapshots.get(eventsScopeKey) === computedPresentationSnapshot
+        ) {
+          return previous;
+        }
+
+        const cachedSnapshots = new Map(previous.cachedSnapshots);
+        cachedSnapshots.set(eventsScopeKey, computedPresentationSnapshot);
+        while (cachedSnapshots.size > MONITORING_PRESENTATION_CACHE_LIMIT) {
+          const oldestKey = cachedSnapshots.keys().next().value;
+          if (oldestKey === undefined) break;
+          cachedSnapshots.delete(oldestKey);
+        }
+        return {
+          cachedSnapshots,
+          lastStableSnapshot: computedPresentationSnapshot,
+        };
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [analytics.dataStale, computedPresentationSnapshot, eventsScopeKey]);
+
+  const presentationResolution = useMemo(
+    () =>
+      resolveMonitoringPresentationSnapshot({
+        computedSnapshot: computedPresentationSnapshot,
+        scopeKey: eventsScopeKey,
+        dataStale: analytics.dataStale,
+        cachedSnapshots: presentationSnapshotStore.cachedSnapshots,
+        lastStableSnapshot: presentationSnapshotStore.lastStableSnapshot,
+      }),
+    [
+      analytics.dataStale,
+      computedPresentationSnapshot,
+      eventsScopeKey,
+      presentationSnapshotStore.cachedSnapshots,
+      presentationSnapshotStore.lastStableSnapshot,
+    ]
+  );
+  const presentationSnapshot = presentationResolution.snapshot;
 
   const metadata = useMemo<MonitoringMetadata>(() => {
     const planTypes = Array.from(
@@ -550,22 +861,27 @@ export function useMonitoringData({
     error: [error, analytics.error].filter(Boolean).join('；'),
     authFiles,
     channels,
-    summary,
+    summary: presentationSnapshot.summary,
     metadata,
     statusChips,
-    timeline: timelineData.points,
-    timelineGranularity: timelineData.granularity,
-    hourlyDistribution,
-    modelShareRows,
-    channelRows,
-    modelRows,
-    failureSourceRows,
-    taskBuckets,
-    recentFailures,
-    filteredRows,
-    eventsHasMore,
-    eventsLoadingMore,
-    lastRefreshedAt: analytics.lastRefreshedAt,
+    timeline: presentationSnapshot.timeline,
+    timelineGranularity: presentationSnapshot.timelineGranularity,
+    hourlyDistribution: presentationSnapshot.hourlyDistribution,
+    modelShareRows: presentationSnapshot.modelShareRows,
+    channelRows: presentationSnapshot.channelRows,
+    modelRows: presentationSnapshot.modelRows,
+    failureSourceRows: presentationSnapshot.failureSourceRows,
+    taskBuckets: presentationSnapshot.taskBuckets,
+    recentFailures: presentationSnapshot.recentFailures,
+    accountRows: presentationSnapshot.accountRows,
+    apiKeyRows: presentationSnapshot.apiKeyRows,
+    filterOptions: presentationSnapshot.filterOptions,
+    filteredRows: presentationSnapshot.filteredRows,
+    eventsHasMore: presentationSnapshot.eventsHasMore,
+    eventsLoadingMore: presentationSnapshot.eventsLoadingMore,
+    lastRefreshedAt: presentationSnapshot.lastRefreshedAt,
+    isTransitioningScope: analytics.dataStale,
+    hasPresentationSnapshot: presentationResolution.hasPresentationSnapshot,
     refreshMeta,
     loadMoreEvents,
   };

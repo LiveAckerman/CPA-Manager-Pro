@@ -52,6 +52,8 @@ const tokenColorMap: Record<string, string> = {
   cached: '#f59e0b',
 };
 
+const visibleTokenMixKeys = new Set(['input', 'output', 'reasoning', 'cached']);
+
 const healthToneClassMap: Record<string, string> = {
   future: 'healthFuture',
   empty: 'healthEmpty',
@@ -93,10 +95,11 @@ export function TrafficOverviewCard({
   const [activeTokenSegment, setActiveTokenSegment] = useState<DashboardTokenMixSegment | null>(null);
   const visibleTimeline = buildVisibleTrafficTimeline(timeline, trafficNowMs);
   const hasData = visibleTimeline.some((point) => point.calls > 0 || point.tokens > 0);
-  const tokenMixTotal = tokenMix.reduce((acc, s) => acc + s.tokens, 0);
+  const visibleTokenMix = tokenMix.filter((segment) => visibleTokenMixKeys.has(segment.key));
+  const tokenMixTotal = visibleTokenMix.reduce((acc, s) => acc + s.tokens, 0);
   const displayTotalTokens = todayTotalTokens ?? tokenMixTotal;
-  const hasTokenMixData = tokenMix.some((segment) => segment.tokens > 0);
-  const rankedTokenMix = [...tokenMix].sort((left, right) => right.tokens - left.tokens);
+  const hasTokenMixData = visibleTokenMix.some((segment) => segment.tokens > 0);
+  const rankedTokenMix = [...visibleTokenMix].sort((left, right) => right.tokens - left.tokens);
   const maxTokenMixTokens = rankedTokenMix.reduce((max, segment) => Math.max(max, segment.tokens), 0);
   const trafficAxisTickIndexes = buildTrafficAxisTickIndexes(visibleTimeline.length);
   const trafficGridStyle = { '--bucket-count': Math.max(visibleTimeline.length, 1) } as TrafficGridStyle;

@@ -43,6 +43,7 @@ import styles from './LoginPage.module.scss';
 
 type RedirectState = { from?: { pathname?: string } };
 type UsageSetupStep = 'admin' | 'connection' | 'cpaKey' | 'monitoring' | 'polling' | 'review';
+const CONFIG_TAB_STORAGE_KEY = 'config-management:tab';
 
 function getLocalizedErrorMessage(
   error: unknown,
@@ -67,10 +68,23 @@ function getLocalizedErrorMessage(
           ? error
           : '';
 
-  if (status === 401) return t('login.error_unauthorized');
-  if (status === 403) return t('login.error_forbidden');
-  if (status === 404) return t('login.error_not_found');
-  if (status && status >= 500) return t('login.error_server');
+  const withHttpStatus = (summary: string) => {
+    if (!status) return summary;
+
+    const genericAxiosMessage = `Request failed with status code ${status}`;
+    const detail = message.trim();
+    const backendDetail =
+      detail && detail !== genericAxiosMessage
+        ? ` (${t('login.error_backend_detail')}: ${detail})`
+        : '';
+
+    return `HTTP ${status}: ${summary}${backendDetail}`;
+  };
+
+  if (status === 401) return withHttpStatus(t('login.error_unauthorized'));
+  if (status === 403) return withHttpStatus(t('login.error_forbidden'));
+  if (status === 404) return withHttpStatus(t('login.error_not_found'));
+  if (status && status >= 500) return withHttpStatus(t('login.error_server'));
   if (code === 'ECONNABORTED' || message.toLowerCase().includes('timeout')) {
     return t('login.error_timeout');
   }
@@ -84,7 +98,7 @@ function getLocalizedErrorMessage(
     return t('login.error_cors');
   }
 
-  return t('login.error_invalid');
+  return withHttpStatus(t('login.error_invalid'));
 }
 
 export function LoginPage() {
@@ -245,7 +259,13 @@ export function LoginPage() {
         if (autoLoggedIn) {
           setAutoLoginSuccess(true);
           setTimeout(() => {
-            const redirect = (location.state as RedirectState | null)?.from?.pathname || '/';
+            const redirect =
+              autoLoggedIn.recoveryMode === 'manager_config'
+                ? '/config'
+                : (location.state as RedirectState | null)?.from?.pathname || '/';
+            if (autoLoggedIn.recoveryMode === 'manager_config') {
+              localStorage.setItem(CONFIG_TAB_STORAGE_KEY, 'manager');
+            }
             navigate(redirect, { replace: true });
           }, 1500);
           return;
@@ -409,7 +429,7 @@ export function LoginPage() {
         );
       }
 
-      await login({
+      const loginResult = await login({
         apiBase: isManagerServerMode ? detectedBase : baseToUse,
         managementKey: isManagerServerMode ? trimmedAdminKey : trimmedCPAKey,
         rememberPassword: rememberCredential,
@@ -417,7 +437,12 @@ export function LoginPage() {
         sessionPanelBase: detectedBase,
       });
       showNotification(t('common.connected_status'), 'success');
-      navigate('/', { replace: true });
+      if (loginResult.recoveryMode === 'manager_config') {
+        localStorage.setItem(CONFIG_TAB_STORAGE_KEY, 'manager');
+        navigate('/config', { replace: true });
+      } else {
+        navigate('/', { replace: true });
+      }
     } catch (err: unknown) {
       const message = getLocalizedErrorMessage(err, t);
       setError(message);
@@ -685,46 +710,68 @@ export function LoginPage() {
                     )}
 
                     {usageSetupStep === 'review' && (
-                      <div className={styles.reviewGrid}>
-                        <div>
-                          <span className={styles.reviewIcon}>
-                            <IconShield size={18} />
-                          </span>
-                          <span>{t('login.admin_key_label')}</span>
-                          <strong>{adminKey ? '************' : '-'}</strong>
+                      <div className={styles.stepFields}>
+                        <div className={styles.optionBox}>
+                          <SelectionCheckbox
+                            checked={rememberCredential}
+                            onChange={setRememberCredential}
+                            ariaLabel={t('login.remember_credential_label')}
+                            label={t('login.remember_credential_label')}
+                            labelClassName={styles.toggleLabel}
+                          />
                         </div>
-                        <div>
-                          <span className={styles.reviewIcon}>
-                            <IconInfo size={18} />
-                          </span>
-                          <span>{t('login.cpa_connection_label')}</span>
-                          <strong>{apiBase || '-'}</strong>
-                        </div>
-                        <div>
-                          <span className={styles.reviewIcon}>
-                            <IconKey size={18} />
-                          </span>
-                          <span>{t('login.cpa_management_key_label')}</span>
-                          <strong>{cpaManagementKey ? '************' : '-'}</strong>
-                        </div>
-                        <div>
-                          <span className={styles.reviewIcon}>
-                            <IconEye size={18} />
-                          </span>
-                          <span>{t('login.request_monitoring_enabled')}</span>
-                          <strong>
-                            {requestMonitoringEnabled ? t('common.enabled') : t('common.disabled')}
-                          </strong>
-                        </div>
-                        {requestMonitoringEnabled && (
+                        <div className={styles.reviewGrid}>
                           <div>
                             <span className={styles.reviewIcon}>
-                              <IconTimer size={18} />
+                              <IconShield size={18} />
                             </span>
-                            <span>{t('login.poll_interval_label')}</span>
-                            <strong>{pollIntervalMs}</strong>
+                            <span>{t('login.admin_key_label')}</span>
+                            <strong>{adminKey ? '************' : '-'}</strong>
                           </div>
-                        )}
+                          <div>
+                            <span className={styles.reviewIcon}>
+                              <IconKey size={18} />
+                            </span>
+                            <span>{t('login.remember_credential_label')}</span>
+                            <strong>
+                              {rememberCredential ? t('common.enabled') : t('common.disabled')}
+                            </strong>
+                          </div>
+                          <div>
+                            <span className={styles.reviewIcon}>
+                              <IconInfo size={18} />
+                            </span>
+                            <span>{t('login.cpa_connection_label')}</span>
+                            <strong>{apiBase || '-'}</strong>
+                          </div>
+                          <div>
+                            <span className={styles.reviewIcon}>
+                              <IconKey size={18} />
+                            </span>
+                            <span>{t('login.cpa_management_key_label')}</span>
+                            <strong>{cpaManagementKey ? '************' : '-'}</strong>
+                          </div>
+                          <div>
+                            <span className={styles.reviewIcon}>
+                              <IconEye size={18} />
+                            </span>
+                            <span>{t('login.request_monitoring_enabled')}</span>
+                            <strong>
+                              {requestMonitoringEnabled
+                                ? t('common.enabled')
+                                : t('common.disabled')}
+                            </strong>
+                          </div>
+                          {requestMonitoringEnabled && (
+                            <div>
+                              <span className={styles.reviewIcon}>
+                                <IconTimer size={18} />
+                              </span>
+                              <span>{t('login.poll_interval_label')}</span>
+                              <strong>{pollIntervalMs}</strong>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>

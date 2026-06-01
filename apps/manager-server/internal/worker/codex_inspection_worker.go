@@ -62,7 +62,7 @@ func (w *CodexInspectionWorker) tick(ctx context.Context) {
 		return
 	}
 	go func() {
-		if _, err := w.service.Run(context.Background(), codexinspectionservice.RunRequest{
+		if _, err := w.service.Run(ctx, codexinspectionservice.RunRequest{
 			TriggerType: model.CodexInspectionTriggerScheduled,
 			TriggerKey:  triggerKey,
 		}); err != nil && err != codexinspectionservice.ErrRunAlreadyActive {

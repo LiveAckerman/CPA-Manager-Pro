@@ -31,9 +31,12 @@ const (
 )
 
 var (
-	ErrRunAlreadyActive = errors.New("codex inspection is already running")
-	ErrNotConfigured    = errors.New("usage service is not configured")
-	ErrRunNotFound      = errors.New("codex inspection run not found")
+	ErrRunAlreadyActive    = errors.New("codex inspection is already running")
+	ErrNotConfigured       = errors.New("usage service is not configured")
+	ErrRunNotFound         = errors.New("codex inspection run not found")
+	ErrRunNotCompleted     = errors.New("codex inspection run is not completed")
+	ErrActionIDsRequired   = errors.New("codex inspection action result ids are required")
+	ErrNoActionableResults = errors.New("codex inspection has no actionable results")
 )
 
 type Service struct {
@@ -54,6 +57,26 @@ type RunDetail struct {
 	Run     model.CodexInspectionRun      `json:"run"`
 	Results []model.CodexInspectionResult `json:"results"`
 	Logs    []model.CodexInspectionLog    `json:"logs"`
+}
+
+type ExecuteActionsRequest struct {
+	ResultIDs []int64 `json:"resultIds"`
+}
+
+type ActionOutcome struct {
+	ResultID       int64  `json:"resultId,omitempty"`
+	AccountKey     string `json:"accountKey,omitempty"`
+	FileName       string `json:"fileName"`
+	DisplayAccount string `json:"displayAccount"`
+	Action         string `json:"action"`
+	Status         string `json:"status"`
+	Success        bool   `json:"success"`
+	Error          string `json:"error,omitempty"`
+}
+
+type ExecuteActionsResult struct {
+	Outcomes []ActionOutcome `json:"outcomes"`
+	Detail   RunDetail       `json:"detail"`
 }
 
 type authFile map[string]any
@@ -84,6 +107,31 @@ type inspectionDecision struct {
 	UsedPercent  *float64
 	IsQuota      bool
 }
+
+type fileActionGroup struct {
+	FileName string
+	Items    []model.CodexInspectionResult
+	Action   string
+	Mixed    bool
+}
+
+type actionEndpointError struct {
+	Endpoint string
+	Err      error
+}
+
+type unauthorizedReason string
+
+const (
+	unauthorizedReasonUnknown     unauthorizedReason = "unknown"
+	unauthorizedReasonExpired     unauthorizedReason = "expired"
+	unauthorizedReasonInvalidated unauthorizedReason = "invalidated"
+)
+
+const (
+	fileActionDuplicateReason = "CPA 认证文件动作按文件执行，该文件已由另一条结果处理"
+	fileActionMixedReason     = "同一认证文件下存在多个不同建议动作，文件级处理已阻止，请到认证文件管理中手动处理"
+)
 
 type codexRateLimit struct {
 	Allowed         *bool
@@ -175,16 +223,32 @@ func (s *Service) Run(ctx context.Context, req RunRequest) (RunDetail, error) {
 	})
 
 	results := s.inspectAccounts(ctx, setup, settings, run.ID, sampled, logger)
+	if err := ctx.Err(); err != nil {
+		for _, result := range results {
+			result.RunID = run.ID
+			_, _ = s.store.InsertCodexInspectionResult(persistCtx, result)
+		}
+		run = summarizeRun(run, results)
+		run.Status = model.CodexInspectionStatusFailed
+		run.Error = err.Error()
+		run.FinishedAtMS = time.Now().UnixMilli()
+		if err := s.store.UpdateCodexInspectionRun(persistCtx, run); err != nil {
+			return RunDetail{}, err
+		}
+		logger.warning(persistCtx, "Codex 巡检已取消", map[string]any{"error": run.Error})
+		return s.GetRun(persistCtx, run.ID)
+	}
+
 	results = resolveAutoActionResults(settings.AutoActionMode, results)
-	actionErrors := s.executeActions(ctx, setup, settings, results, logger)
-	results = annotateActionErrors(results, actionErrors)
+	actionOutcomes := s.executeAutoActions(ctx, setup, settings, results, logger)
+	results = applyActionOutcomes(results, actionOutcomes)
 	for _, result := range results {
 		result.RunID = run.ID
 		_, _ = s.store.InsertCodexInspectionResult(persistCtx, result)
 	}
 	run = summarizeRun(run, results)
-	if len(actionErrors) > 0 {
-		run.Error = fmt.Sprintf("%d 个自动处理动作执行失败，详见巡检日志", len(actionErrors))
+	if failed := countFailedOutcomes(actionOutcomes); failed > 0 {
+		run.Error = fmt.Sprintf("%d 个自动处理动作执行失败，详见巡检日志", failed)
 	}
 	run.Status = model.CodexInspectionStatusCompleted
 	run.FinishedAtMS = time.Now().UnixMilli()
@@ -196,7 +260,7 @@ func (s *Service) Run(ctx context.Context, req RunRequest) (RunDetail, error) {
 		"disableCount": run.DisableCount,
 		"enableCount":  run.EnableCount,
 		"keepCount":    run.KeepCount,
-		"actionErrors": actionErrors,
+		"actionErrors": failedActionOutcomes(actionOutcomes),
 	})
 	return s.GetRun(persistCtx, run.ID)
 }
@@ -222,6 +286,101 @@ func (s *Service) GetRun(ctx context.Context, id int64) (RunDetail, error) {
 		return RunDetail{}, err
 	}
 	return RunDetail{Run: run, Results: results, Logs: logs}, nil
+}
+
+func (s *Service) ExecuteManualActions(ctx context.Context, runID int64, req ExecuteActionsRequest) (ExecuteActionsResult, error) {
+	if err := s.acquireRun(); err != nil {
+		return ExecuteActionsResult{}, err
+	}
+	defer s.releaseRun()
+
+	if len(req.ResultIDs) == 0 {
+		return ExecuteActionsResult{}, ErrActionIDsRequired
+	}
+
+	settings, setup, err := s.resolveRuntime(ctx)
+	if err != nil {
+		return ExecuteActionsResult{}, err
+	}
+	detail, err := s.GetRun(ctx, runID)
+	if err != nil {
+		return ExecuteActionsResult{}, err
+	}
+	if detail.Run.Status != model.CodexInspectionStatusCompleted {
+		return ExecuteActionsResult{}, ErrRunNotCompleted
+	}
+	if detail.Run.Settings.TargetType != "" {
+		settings = detail.Run.Settings
+	}
+
+	selected := map[int64]struct{}{}
+	for _, id := range req.ResultIDs {
+		if id > 0 {
+			selected[id] = struct{}{}
+		}
+	}
+	if len(selected) == 0 {
+		return ExecuteActionsResult{}, ErrActionIDsRequired
+	}
+
+	items, preflightOutcomes := selectManualActionItems(detail.Results, selected)
+	if len(items) == 0 && len(preflightOutcomes) == 0 {
+		return ExecuteActionsResult{}, ErrNoActionableResults
+	}
+
+	persistCtx := context.WithoutCancel(ctx)
+	logger := runLogger{service: s, runID: detail.Run.ID}
+	logger.info(persistCtx, "手动处理账号开始", map[string]any{
+		"requestedCount": len(req.ResultIDs),
+		"actionCount":    len(items),
+	})
+	for _, outcome := range preflightOutcomes {
+		logger.warning(persistCtx, "手动处理账号跳过", map[string]any{
+			"fileName":       outcome.FileName,
+			"displayAccount": outcome.DisplayAccount,
+			"action":         outcome.Action,
+			"reason":         outcome.Error,
+		})
+	}
+
+	validItems, validationOutcomes, err := s.validateManualActionItems(ctx, persistCtx, setup, items, logger)
+	if err != nil {
+		return ExecuteActionsResult{}, err
+	}
+	outcomes := make([]ActionOutcome, 0, len(preflightOutcomes)+len(validationOutcomes)+len(validItems))
+	outcomes = append(outcomes, preflightOutcomes...)
+	outcomes = append(outcomes, validationOutcomes...)
+	outcomes = append(outcomes, s.executeActionItems(ctx, setup, settings, validItems, logger, "手动处理", func(item model.CodexInspectionResult) string {
+		return item.Action
+	})...)
+	if len(outcomes) == 0 {
+		return ExecuteActionsResult{}, ErrNoActionableResults
+	}
+	nextResults := applyActionOutcomes(detail.Results, outcomes)
+	for _, result := range nextResults {
+		result.RunID = detail.Run.ID
+		_, _ = s.store.InsertCodexInspectionResult(persistCtx, result)
+	}
+
+	run := summarizeRun(detail.Run, nextResults)
+	if failed := countFailedOutcomes(outcomes); failed > 0 {
+		run.Error = fmt.Sprintf("%d 个手动处理动作执行失败，详见巡检日志", failed)
+	} else {
+		run.Error = ""
+	}
+	if err := s.store.UpdateCodexInspectionRun(persistCtx, run); err != nil {
+		return ExecuteActionsResult{}, err
+	}
+	logger.success(persistCtx, "手动处理账号完成", map[string]any{
+		"successCount": len(outcomes) - countFailedOutcomes(outcomes),
+		"failedCount":  countFailedOutcomes(outcomes),
+	})
+
+	nextDetail, err := s.GetRun(persistCtx, detail.Run.ID)
+	if err != nil {
+		return ExecuteActionsResult{}, err
+	}
+	return ExecuteActionsResult{Outcomes: outcomes, Detail: nextDetail}, nil
 }
 
 func (s *Service) ResolveConfig(ctx context.Context) (model.ManagerCodexInspectionConfig, bool, error) {
@@ -453,7 +612,7 @@ func (s *Service) inspectSingleAccount(
 		strings.Contains(bodyLower, "payment_required") ||
 		isRateLimitReached(rateLimit) ||
 		(usedPercent != nil && *usedPercent >= settings.UsedPercentThreshold)
-	decision := resolveProbeAction(item, statusCode, rateLimit, usedPercent, isQuota, settings.UsedPercentThreshold)
+	decision := resolveProbeAction(item, statusCode, response.BodyText, rateLimit, usedPercent, isQuota, settings.UsedPercentThreshold)
 
 	base.Action = decision.Action
 	base.ActionReason = decision.ActionReason
@@ -567,56 +726,124 @@ func (s *Service) requestCodexUsageAt(
 	}, res.StatusCode, nil
 }
 
-func (s *Service) executeActions(
+func (s *Service) executeAutoActions(
 	ctx context.Context,
 	setup store.Setup,
 	settings model.ManagerCodexInspectionConfig,
 	results []model.CodexInspectionResult,
 	logger runLogger,
-) map[string]string {
-	items := dedupeActionItems(results)
-	if len(items) == 0 || settings.AutoActionMode == model.CodexInspectionAutoActionNone {
-		return map[string]string{}
+) []ActionOutcome {
+	mode := model.NormalizeCodexInspectionAutoActionMode(settings.AutoActionMode, model.CodexInspectionAutoActionNone)
+	items, preflightOutcomes := selectAutoActionItems(mode, results)
+	if len(items) == 0 {
+		return preflightOutcomes
 	}
+	outcomes := make([]ActionOutcome, 0, len(preflightOutcomes)+len(items))
+	outcomes = append(outcomes, preflightOutcomes...)
+	outcomes = append(outcomes, s.executeActionItems(ctx, setup, settings, items, logger, "自动处理", func(item model.CodexInspectionResult) string {
+		return resolveExecutableAction(mode, item.Action)
+	})...)
+	return outcomes
+}
+
+func (s *Service) executeActionItems(
+	ctx context.Context,
+	setup store.Setup,
+	settings model.ManagerCodexInspectionConfig,
+	items []model.CodexInspectionResult,
+	logger runLogger,
+	logPrefix string,
+	actionFor func(model.CodexInspectionResult) string,
+) []ActionOutcome {
 	workers := settings.DeleteWorkers
 	if workers <= 0 {
 		workers = 1
 	}
 	jobs := make(chan model.CodexInspectionResult)
+	outcomes := make(chan ActionOutcome, len(items))
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-	failures := map[string]string{}
 	for i := 0; i < workers && i < len(items); i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for item := range jobs {
-				if err := s.executeAction(ctx, setup, item); err != nil {
-					mu.Lock()
-					failures[item.AccountKey] = err.Error()
-					mu.Unlock()
-					logger.error(ctx, "自动处理账号失败", map[string]any{
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case item, ok := <-jobs:
+					if !ok {
+						return
+					}
+					action := item.Action
+					if actionFor != nil {
+						action = actionFor(item)
+					}
+					if action == "" {
+						action = item.Action
+					}
+					actionItem := item
+					actionItem.Action = action
+					outcome := ActionOutcome{
+						ResultID:       item.ID,
+						AccountKey:     item.AccountKey,
+						FileName:       item.FileName,
+						DisplayAccount: item.DisplayAccount,
+						Action:         action,
+					}
+					if err := s.executeAction(ctx, setup, actionItem); err != nil {
+						outcome.Success = false
+						outcome.Status = model.CodexInspectionActionStatusFailed
+						outcome.Error = err.Error()
+						outcomes <- outcome
+						logger.error(ctx, logPrefix+"账号失败", map[string]any{
+							"fileName":       item.FileName,
+							"displayAccount": item.DisplayAccount,
+							"action":         action,
+							"error":          err.Error(),
+						})
+						continue
+					}
+					outcome.Success = true
+					outcome.Status = model.CodexInspectionActionStatusSuccess
+					outcomes <- outcome
+					logger.success(ctx, logPrefix+"账号成功", map[string]any{
 						"fileName":       item.FileName,
 						"displayAccount": item.DisplayAccount,
-						"action":         item.Action,
-						"error":          err.Error(),
+						"action":         action,
 					})
-					continue
 				}
-				logger.success(ctx, "自动处理账号成功", map[string]any{
-					"fileName":       item.FileName,
-					"displayAccount": item.DisplayAccount,
-					"action":         item.Action,
-				})
 			}
 		}()
 	}
 	for _, item := range items {
-		jobs <- item
+		select {
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			close(outcomes)
+			return collectActionOutcomes(outcomes, len(items))
+		case jobs <- item:
+		}
 	}
 	close(jobs)
 	wg.Wait()
-	return failures
+	close(outcomes)
+
+	return collectActionOutcomes(outcomes, len(items))
+}
+
+func collectActionOutcomes(outcomes <-chan ActionOutcome, capacity int) []ActionOutcome {
+	result := make([]ActionOutcome, 0, capacity)
+	for outcome := range outcomes {
+		result = append(result, outcome)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].FileName == result[j].FileName {
+			return result[i].Action < result[j].Action
+		}
+		return result[i].FileName < result[j].FileName
+	})
+	return result
 }
 
 func (s *Service) executeAction(ctx context.Context, setup store.Setup, item model.CodexInspectionResult) error {
@@ -632,19 +859,34 @@ func (s *Service) executeAction(ctx context.Context, setup store.Setup, item mod
 	case "disable", "enable":
 		disabled := item.Action == "disable"
 		payload := map[string]any{"name": item.FileName, "disabled": disabled}
-		if err, status := s.patchAuthFile(ctx, setup, "/auth-files", payload); err != nil {
-			if statusErr, statusCode := s.patchAuthFile(ctx, setup, "/auth-files/status", payload); statusErr == nil {
-				return nil
-			} else if shouldFallbackManagement(status) && shouldFallbackManagement(statusCode) {
-				if err := s.patchAuthFileOnly(ctx, setup, "/v0/management/auth-files", payload); err != nil {
-					return s.patchAuthFileOnly(ctx, setup, "/v0/management/auth-files/status", payload)
-				}
-				return nil
-			} else {
-				return statusErr
-			}
+		primaryErr, primaryStatus := s.patchAuthFile(ctx, setup, "/auth-files", payload)
+		if primaryErr == nil {
+			return nil
 		}
-		return nil
+		statusErr, statusCode := s.patchAuthFile(ctx, setup, "/auth-files/status", payload)
+		if statusErr == nil {
+			return nil
+		}
+		if shouldFallbackManagement(primaryStatus) && shouldFallbackManagement(statusCode) {
+			managementErr, _ := s.patchAuthFile(ctx, setup, "/v0/management/auth-files", payload)
+			if managementErr == nil {
+				return nil
+			}
+			managementStatusErr, _ := s.patchAuthFile(ctx, setup, "/v0/management/auth-files/status", payload)
+			if managementStatusErr == nil {
+				return nil
+			}
+			return combineActionEndpointErrors(
+				actionEndpointError{Endpoint: "/auth-files", Err: primaryErr},
+				actionEndpointError{Endpoint: "/auth-files/status", Err: statusErr},
+				actionEndpointError{Endpoint: "/v0/management/auth-files", Err: managementErr},
+				actionEndpointError{Endpoint: "/v0/management/auth-files/status", Err: managementStatusErr},
+			)
+		}
+		return combineActionEndpointErrors(
+			actionEndpointError{Endpoint: "/auth-files", Err: primaryErr},
+			actionEndpointError{Endpoint: "/auth-files/status", Err: statusErr},
+		)
 	default:
 		return nil
 	}
@@ -667,6 +909,20 @@ func (s *Service) deleteAuthFile(ctx context.Context, setup store.Setup, path st
 func (s *Service) patchAuthFileOnly(ctx context.Context, setup store.Setup, path string, payload map[string]any) error {
 	err, _ := s.patchAuthFile(ctx, setup, path, payload)
 	return err
+}
+
+func combineActionEndpointErrors(items ...actionEndpointError) error {
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Err == nil {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s: %v", item.Endpoint, item.Err))
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(parts, "; "))
 }
 
 func (s *Service) patchAuthFile(ctx context.Context, setup store.Setup, path string, payload map[string]any) (error, int) {
@@ -744,14 +1000,14 @@ func (l runLogger) log(ctx context.Context, level string, message string, detail
 	})
 }
 
-func resolveProbeAction(item account, statusCode int, rateLimit *codexRateLimit, usedPercent *float64, isQuota bool, threshold float64) inspectionDecision {
-	if decision := resolveWindowAwareProbeAction(item, statusCode, rateLimit, threshold); decision != nil {
+func resolveProbeAction(item account, statusCode int, bodyText string, rateLimit *codexRateLimit, usedPercent *float64, isQuota bool, threshold float64) inspectionDecision {
+	if decision := resolveWindowAwareProbeAction(item, statusCode, bodyText, rateLimit, threshold); decision != nil {
 		return *decision
 	}
-	return resolveLegacyProbeAction(item, statusCode, usedPercent, isQuota, threshold)
+	return resolveLegacyProbeAction(item, statusCode, bodyText, usedPercent, isQuota, threshold)
 }
 
-func resolveWindowAwareProbeAction(item account, statusCode int, rateLimit *codexRateLimit, threshold float64) *inspectionDecision {
+func resolveWindowAwareProbeAction(item account, statusCode int, bodyText string, rateLimit *codexRateLimit, threshold float64) *inspectionDecision {
 	if rateLimit == nil {
 		return nil
 	}
@@ -764,12 +1020,8 @@ func resolveWindowAwareProbeAction(item account, statusCode int, rateLimit *code
 	fiveHourOverThreshold := fiveHour != nil && fiveHour.UsedPercent != nil && *fiveHour.UsedPercent >= threshold
 
 	if statusCode == http.StatusUnauthorized {
-		return &inspectionDecision{
-			Action:       "delete",
-			ActionReason: "接口返回 401，建议删除失效账号",
-			UsedPercent:  ptrFloat(weeklyUsedPercent),
-			IsQuota:      false,
-		}
+		decision := resolveUnauthorizedProbeAction(bodyText, ptrFloat(weeklyUsedPercent))
+		return &decision
 	}
 	if weeklyUsedPercent >= threshold {
 		if item.Disabled {
@@ -815,15 +1067,10 @@ func resolveWindowAwareProbeAction(item account, statusCode int, rateLimit *code
 	}
 }
 
-func resolveLegacyProbeAction(item account, statusCode int, usedPercent *float64, isQuota bool, threshold float64) inspectionDecision {
+func resolveLegacyProbeAction(item account, statusCode int, bodyText string, usedPercent *float64, isQuota bool, threshold float64) inspectionDecision {
 	overThreshold := usedPercent != nil && *usedPercent >= threshold
 	if statusCode == http.StatusUnauthorized {
-		return inspectionDecision{
-			Action:       "delete",
-			ActionReason: "接口返回 401，建议删除失效账号",
-			UsedPercent:  usedPercent,
-			IsQuota:      false,
-		}
+		return resolveUnauthorizedProbeAction(bodyText, usedPercent)
 	}
 	if isQuota || overThreshold {
 		if item.Disabled {
@@ -850,6 +1097,48 @@ func resolveLegacyProbeAction(item account, statusCode int, usedPercent *float64
 	return inspectionDecision{Action: "keep", ActionReason: "无需处理", UsedPercent: usedPercent, IsQuota: false}
 }
 
+func resolveUnauthorizedProbeAction(bodyText string, usedPercent *float64) inspectionDecision {
+	switch classifyUnauthorizedReason(bodyText) {
+	case unauthorizedReasonExpired:
+		return inspectionDecision{
+			Action:       "reauth",
+			ActionReason: "接口返回 401，登录已过期，建议重新登录账号",
+			UsedPercent:  usedPercent,
+			IsQuota:      false,
+		}
+	case unauthorizedReasonInvalidated:
+		return inspectionDecision{
+			Action:       "delete",
+			ActionReason: "接口返回 401，认证令牌已失效，建议删除账号",
+			UsedPercent:  usedPercent,
+			IsQuota:      false,
+		}
+	default:
+		return inspectionDecision{
+			Action:       "delete",
+			ActionReason: "接口返回 401，建议删除失效账号",
+			UsedPercent:  usedPercent,
+			IsQuota:      false,
+		}
+	}
+}
+
+func classifyUnauthorizedReason(bodyText string) unauthorizedReason {
+	normalized := strings.ToLower(strings.TrimSpace(bodyText))
+	switch {
+	case strings.Contains(normalized, "provided authentication token is expired") ||
+		strings.Contains(normalized, "authentication token is expired") ||
+		strings.Contains(normalized, "token is expired"):
+		return unauthorizedReasonExpired
+	case strings.Contains(normalized, "authentication token has been invalidated") ||
+		strings.Contains(normalized, "token has been invalidated") ||
+		strings.Contains(normalized, "token is invalidated"):
+		return unauthorizedReasonInvalidated
+	default:
+		return unauthorizedReasonUnknown
+	}
+}
+
 func resolveAutoActionResults(mode string, results []model.CodexInspectionResult) []model.CodexInspectionResult {
 	mode = model.NormalizeCodexInspectionAutoActionMode(mode, model.CodexInspectionAutoActionNone)
 	if mode == model.CodexInspectionAutoActionNone {
@@ -857,44 +1146,240 @@ func resolveAutoActionResults(mode string, results []model.CodexInspectionResult
 	}
 	out := make([]model.CodexInspectionResult, len(results))
 	copy(out, results)
-	for i := range out {
-		if mode == model.CodexInspectionAutoActionDisable && out[i].Action == "delete" {
-			out[i].Action = "disable"
-			if strings.TrimSpace(out[i].ActionReason) != "" {
-				out[i].ActionReason += "；自动禁用策略改为禁用账号"
-			} else {
-				out[i].ActionReason = "自动禁用策略改为禁用账号"
-			}
-		}
-	}
 	return out
 }
 
-func dedupeActionItems(results []model.CodexInspectionResult) []model.CodexInspectionResult {
-	seen := map[string]model.CodexInspectionResult{}
+func resolveExecutableAction(mode string, action string) string {
+	if mode == model.CodexInspectionAutoActionDisable && action == "delete" {
+		return "disable"
+	}
+	return action
+}
+
+func selectAutoActionItems(mode string, results []model.CodexInspectionResult) ([]model.CodexInspectionResult, []ActionOutcome) {
+	mode = model.NormalizeCodexInspectionAutoActionMode(mode, model.CodexInspectionAutoActionNone)
+	if mode == model.CodexInspectionAutoActionNone {
+		return nil, nil
+	}
+
+	items := make([]model.CodexInspectionResult, 0)
+	outcomes := make([]ActionOutcome, 0)
+	for _, group := range buildExecutableFileActionGroups(results) {
+		if group.Mixed {
+			for _, result := range group.Items {
+				outcomes = append(outcomes, needsReviewActionOutcome(result, result.Action, fileActionMixedReason))
+			}
+			continue
+		}
+		if len(group.Items) == 0 || !allowAutoAction(mode, group.Items[0]) {
+			continue
+		}
+		items = append(items, group.Items[0])
+		for _, result := range group.Items[1:] {
+			outcomes = append(outcomes, skippedActionOutcome(result, result.Action, fileActionDuplicateReason))
+		}
+	}
+	return items, outcomes
+}
+
+func buildExecutableFileActionGroups(results []model.CodexInspectionResult) []fileActionGroup {
+	groupOrder := make([]string, 0)
+	groupsByFileName := map[string]*fileActionGroup{}
 	for _, result := range results {
-		if result.Action == "keep" || result.Action == "enable" || result.FileName == "" {
+		if !isExecutableInspectionAction(result.Action) {
 			continue
 		}
-		if _, ok := seen[result.FileName]; ok {
+		fileName := strings.TrimSpace(result.FileName)
+		if fileName == "" {
 			continue
 		}
-		seen[result.FileName] = result
+		group, ok := groupsByFileName[fileName]
+		if !ok {
+			group = &fileActionGroup{FileName: fileName, Action: result.Action}
+			groupsByFileName[fileName] = group
+			groupOrder = append(groupOrder, fileName)
+		}
+		if result.Action != group.Action {
+			group.Mixed = true
+		}
+		group.Items = append(group.Items, result)
 	}
-	items := make([]model.CodexInspectionResult, 0, len(seen))
-	for _, item := range seen {
-		items = append(items, item)
+	groups := make([]fileActionGroup, 0, len(groupOrder))
+	for _, fileName := range groupOrder {
+		groups = append(groups, *groupsByFileName[fileName])
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].FileName < items[j].FileName })
-	return items
+	return groups
+}
+
+func allowAutoAction(mode string, result model.CodexInspectionResult) bool {
+	switch mode {
+	case model.CodexInspectionAutoActionEnable:
+		return result.Action == "enable"
+	case model.CodexInspectionAutoActionDisable:
+		return result.Action == "enable" || result.Action == "disable" || result.Action == "delete"
+	case model.CodexInspectionAutoActionDelete:
+		return result.Action == "enable" || result.Action == "disable" || result.Action == "delete"
+	default:
+		return false
+	}
+}
+
+func selectManualActionItems(
+	results []model.CodexInspectionResult,
+	selected map[int64]struct{},
+) ([]model.CodexInspectionResult, []ActionOutcome) {
+	items := make([]model.CodexInspectionResult, 0, len(selected))
+	outcomes := make([]ActionOutcome, 0)
+	seenFileNames := map[string]struct{}{}
+	groupByFileName := map[string]fileActionGroup{}
+	for _, group := range buildExecutableFileActionGroups(results) {
+		groupByFileName[group.FileName] = group
+	}
+	for _, result := range results {
+		if _, ok := selected[result.ID]; !ok {
+			continue
+		}
+		fileName := strings.TrimSpace(result.FileName)
+		if !isExecutableInspectionAction(result.Action) {
+			outcomes = append(outcomes, skippedActionOutcome(result, result.Action, "该巡检结果不是可执行动作"))
+			continue
+		}
+		switch model.NormalizeCodexInspectionActionStatus(result.ActionStatus, result.Action) {
+		case model.CodexInspectionActionStatusSuccess:
+			outcomes = append(outcomes, skippedActionOutcome(result, result.Action, "该建议动作已执行成功"))
+			continue
+		case model.CodexInspectionActionStatusSkipped:
+			outcomes = append(outcomes, skippedActionOutcome(result, result.Action, "该建议动作已跳过"))
+			continue
+		case model.CodexInspectionActionStatusNeedsReview:
+			outcomes = append(outcomes, needsReviewActionOutcome(result, result.Action, "该建议动作需要到认证文件管理中人工处理"))
+			continue
+		}
+		if fileName == "" {
+			outcomes = append(outcomes, failedActionOutcome(result, result.Action, "认证文件名为空，无法执行"))
+			continue
+		}
+		group, ok := groupByFileName[fileName]
+		if ok && group.Mixed {
+			outcomes = append(outcomes, needsReviewActionOutcome(result, result.Action, fileActionMixedReason))
+			continue
+		}
+		if ok && len(group.Items) > 0 && group.Items[0].ID != result.ID {
+			outcomes = append(outcomes, skippedActionOutcome(result, result.Action, "CPA 认证文件动作按文件执行，该文件已有另一条结果作为可执行项"))
+			continue
+		}
+		if _, ok := seenFileNames[fileName]; ok {
+			outcomes = append(outcomes, skippedActionOutcome(result, result.Action, "CPA 认证文件动作按文件执行，同名文件已由另一条结果处理"))
+			continue
+		}
+		seenFileNames[fileName] = struct{}{}
+		items = append(items, result)
+	}
+	return items, outcomes
+}
+
+func isExecutableInspectionAction(action string) bool {
+	return action == "delete" || action == "disable" || action == "enable"
+}
+
+func (s *Service) validateManualActionItems(
+	ctx context.Context,
+	logCtx context.Context,
+	setup store.Setup,
+	items []model.CodexInspectionResult,
+	logger runLogger,
+) ([]model.CodexInspectionResult, []ActionOutcome, error) {
+	if len(items) == 0 {
+		return nil, nil, nil
+	}
+	files, err := s.fetchAuthFiles(ctx, setup)
+	if err != nil {
+		return nil, nil, err
+	}
+	currentByFile := map[string][]account{}
+	for _, file := range files {
+		item := toAccount(file)
+		currentByFile[item.FileName] = append(currentByFile[item.FileName], item)
+	}
+
+	validItems := make([]model.CodexInspectionResult, 0, len(items))
+	outcomes := make([]ActionOutcome, 0)
+	for _, item := range items {
+		current, ok := matchCurrentAccount(currentByFile[item.FileName], item)
+		if !ok {
+			outcome := failedActionOutcome(item, item.Action, "认证文件不存在或账号标识已变化，已拒绝执行")
+			outcomes = append(outcomes, outcome)
+			logger.warning(logCtx, "手动处理账号校验失败", map[string]any{
+				"fileName":       item.FileName,
+				"displayAccount": item.DisplayAccount,
+				"authIndex":      item.AuthIndex,
+				"accountId":      item.AccountID,
+				"error":          outcome.Error,
+			})
+			continue
+		}
+		if item.Action == "disable" && current.Disabled {
+			outcome := skippedActionOutcome(item, item.Action, "账号已是禁用状态，未重复执行")
+			outcomes = append(outcomes, outcome)
+			logger.info(logCtx, "手动处理账号跳过", map[string]any{
+				"fileName":       item.FileName,
+				"displayAccount": item.DisplayAccount,
+				"action":         item.Action,
+				"reason":         outcome.Error,
+			})
+			continue
+		}
+		if item.Action == "enable" && !current.Disabled {
+			outcome := skippedActionOutcome(item, item.Action, "账号已是启用状态，未重复执行")
+			outcomes = append(outcomes, outcome)
+			logger.info(logCtx, "手动处理账号跳过", map[string]any{
+				"fileName":       item.FileName,
+				"displayAccount": item.DisplayAccount,
+				"action":         item.Action,
+				"reason":         outcome.Error,
+			})
+			continue
+		}
+		validItems = append(validItems, item)
+	}
+	return validItems, outcomes, nil
+}
+
+func matchCurrentAccount(candidates []account, result model.CodexInspectionResult) (account, bool) {
+	if len(candidates) == 0 {
+		return account{}, false
+	}
+	authIndex := strings.TrimSpace(result.AuthIndex)
+	accountID := strings.TrimSpace(result.AccountID)
+	if authIndex == "" && accountID == "" {
+		return candidates[0], true
+	}
+	for _, candidate := range candidates {
+		if authIndex != "" && candidate.AuthIndex != authIndex {
+			continue
+		}
+		if accountID != "" && candidate.AccountID != accountID {
+			continue
+		}
+		return candidate, true
+	}
+	return account{}, false
 }
 
 func summarizeRun(run model.CodexInspectionRun, results []model.CodexInspectionResult) model.CodexInspectionRun {
+	run.DisabledCount = 0
+	run.EnabledCount = 0
 	run.DeleteCount = 0
 	run.DisableCount = 0
 	run.EnableCount = 0
+	run.ReauthCount = 0
 	run.KeepCount = 0
 	for _, result := range results {
+		if result.Disabled {
+			run.DisabledCount++
+		} else {
+			run.EnabledCount++
+		}
 		switch result.Action {
 		case "delete":
 			run.DeleteCount++
@@ -902,6 +1387,8 @@ func summarizeRun(run model.CodexInspectionRun, results []model.CodexInspectionR
 			run.DisableCount++
 		case "enable":
 			run.EnableCount++
+		case "reauth":
+			run.ReauthCount++
 		default:
 			run.KeepCount++
 		}
@@ -909,18 +1396,109 @@ func summarizeRun(run model.CodexInspectionRun, results []model.CodexInspectionR
 	return run
 }
 
-func annotateActionErrors(results []model.CodexInspectionResult, actionErrors map[string]string) []model.CodexInspectionResult {
-	if len(actionErrors) == 0 {
+func applyActionOutcomes(results []model.CodexInspectionResult, outcomes []ActionOutcome) []model.CodexInspectionResult {
+	if len(outcomes) == 0 {
 		return results
+	}
+	byKey := map[string]ActionOutcome{}
+	for _, outcome := range outcomes {
+		byKey[outcome.AccountKey] = outcome
 	}
 	out := make([]model.CodexInspectionResult, len(results))
 	copy(out, results)
 	for i := range out {
-		if errText, ok := actionErrors[out[i].AccountKey]; ok {
-			out[i].Error = errText
+		outcome, ok := byKey[out[i].AccountKey]
+		if !ok {
+			continue
+		}
+		status := model.NormalizeCodexInspectionActionStatus(outcome.Status, out[i].Action)
+		if status == model.CodexInspectionActionStatusPending {
+			if outcome.Success {
+				status = model.CodexInspectionActionStatusSuccess
+			} else {
+				status = model.CodexInspectionActionStatusFailed
+			}
+		}
+		out[i].ActionStatus = status
+		out[i].ActionError = outcome.Error
+		out[i].ExecutedAction = ""
+		if status == model.CodexInspectionActionStatusSuccess {
+			out[i].ExecutedAction = outcome.Action
+			out[i].ActionError = ""
+			switch outcome.Action {
+			case "disable":
+				out[i].Disabled = true
+			case "enable":
+				out[i].Disabled = false
+			}
 		}
 	}
 	return out
+}
+
+func failedActionOutcome(item model.CodexInspectionResult, action string, message string) ActionOutcome {
+	return ActionOutcome{
+		ResultID:       item.ID,
+		AccountKey:     item.AccountKey,
+		FileName:       item.FileName,
+		DisplayAccount: item.DisplayAccount,
+		Action:         action,
+		Status:         model.CodexInspectionActionStatusFailed,
+		Success:        false,
+		Error:          message,
+	}
+}
+
+func needsReviewActionOutcome(item model.CodexInspectionResult, action string, message string) ActionOutcome {
+	return ActionOutcome{
+		ResultID:       item.ID,
+		AccountKey:     item.AccountKey,
+		FileName:       item.FileName,
+		DisplayAccount: item.DisplayAccount,
+		Action:         action,
+		Status:         model.CodexInspectionActionStatusNeedsReview,
+		Success:        true,
+		Error:          message,
+	}
+}
+
+func skippedActionOutcome(item model.CodexInspectionResult, action string, message string) ActionOutcome {
+	return ActionOutcome{
+		ResultID:       item.ID,
+		AccountKey:     item.AccountKey,
+		FileName:       item.FileName,
+		DisplayAccount: item.DisplayAccount,
+		Action:         action,
+		Status:         model.CodexInspectionActionStatusSkipped,
+		Success:        true,
+		Error:          message,
+	}
+}
+
+func countFailedOutcomes(outcomes []ActionOutcome) int {
+	count := 0
+	for _, outcome := range outcomes {
+		if !outcome.Success {
+			count++
+		}
+	}
+	return count
+}
+
+func failedActionOutcomes(outcomes []ActionOutcome) []map[string]any {
+	failed := make([]map[string]any, 0)
+	for _, outcome := range outcomes {
+		if outcome.Success {
+			continue
+		}
+		failed = append(failed, map[string]any{
+			"fileName":       outcome.FileName,
+			"displayAccount": outcome.DisplayAccount,
+			"action":         outcome.Action,
+			"error":          outcome.Error,
+		})
+	}
+	return failed
 }
 
 func resultFromAccount(item account) model.CodexInspectionResult {
@@ -967,7 +1545,7 @@ func countAccounts(items []account, disabled bool) int {
 func toAccount(file authFile) account {
 	fileName := firstNonEmpty(readString(file, "name"), readString(file, "id"), normalizeAuthIndex(file["auth_index"]), normalizeAuthIndex(file["authIndex"]), "unknown-auth-file")
 	authIndex := firstNonEmpty(normalizeAuthIndex(file["auth_index"]), normalizeAuthIndex(file["authIndex"]), normalizeAuthIndex(file["auth-index"]))
-	provider := strings.ToLower(firstNonEmpty(readString(file, "provider"), readString(file, "type"), readString(file, "typo")))
+	provider := strings.ToLower(firstNonEmpty(readString(file, "provider"), readString(file, "type")))
 	displayAccount := firstNonEmpty(
 		readString(file, "account"),
 		readString(file, "email"),

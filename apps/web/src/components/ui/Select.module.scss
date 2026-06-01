@@ -4,6 +4,7 @@
   position: relative;
   display: inline-flex;
   align-items: center;
+  min-width: 0;
 }
 
 .wrapFullWidth {
@@ -16,6 +17,7 @@
   justify-content: space-between;
   gap: 8px;
   width: 100%;
+  min-width: 0;
   height: 40px;
   padding: 0 12px;
   border: 1px solid var(--app-input-border);
@@ -49,6 +51,8 @@
 }
 
 .triggerText {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

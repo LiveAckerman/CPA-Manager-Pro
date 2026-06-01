@@ -12,6 +12,7 @@ export const CODEX_INSPECTION_SETTINGS_STORAGE_KEY = 'cli-proxy-codex-inspection
 
 export const CODEX_INSPECTION_AUTO_ACTION_MODES: readonly CodexInspectionAutoActionMode[] = [
   'none',
+  'enable',
   'disable',
   'delete',
 ];
@@ -99,7 +100,7 @@ export const normalizeInspectionAction = (
   fallback: CodexInspectionAction = 'keep'
 ): CodexInspectionAction => {
   const normalized = readString(value).toLowerCase();
-  if (['keep', 'delete', 'disable', 'enable'].includes(normalized)) {
+  if (['keep', 'delete', 'disable', 'enable', 'reauth'].includes(normalized)) {
     return normalized as CodexInspectionAction;
   }
   return fallback;
@@ -109,7 +110,7 @@ export const normalizeStoredActionFilter = (
   value: unknown
 ): CodexInspectionStoredActionFilter => {
   const normalized = readString(value).toLowerCase();
-  if (['all', 'delete', 'disable', 'enable'].includes(normalized)) {
+  if (['all', 'delete', 'disable', 'enable', 'reauth', 'http_401'].includes(normalized)) {
     return normalized as CodexInspectionStoredActionFilter;
   }
   return 'all';

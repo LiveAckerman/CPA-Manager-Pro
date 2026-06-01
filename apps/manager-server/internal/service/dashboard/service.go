@@ -43,18 +43,20 @@ type Window struct {
 }
 
 type TodaySummary struct {
-	TotalCalls       int64    `json:"total_calls"`
-	SuccessCalls     int64    `json:"success_calls"`
-	FailureCalls     int64    `json:"failure_calls"`
-	SuccessRate      float64  `json:"success_rate"`
-	InputTokens      int64    `json:"input_tokens"`
-	OutputTokens     int64    `json:"output_tokens"`
-	CachedTokens     int64    `json:"cached_tokens"`
-	ReasoningTokens  int64    `json:"reasoning_tokens"`
-	TotalTokens      int64    `json:"total_tokens"`
-	TotalCost        float64  `json:"total_cost"`
-	AverageLatencyMS *float64 `json:"average_latency_ms"`
-	ZeroTokenCalls   int64    `json:"zero_token_calls"`
+	TotalCalls          int64    `json:"total_calls"`
+	SuccessCalls        int64    `json:"success_calls"`
+	FailureCalls        int64    `json:"failure_calls"`
+	SuccessRate         float64  `json:"success_rate"`
+	InputTokens         int64    `json:"input_tokens"`
+	OutputTokens        int64    `json:"output_tokens"`
+	CachedTokens        int64    `json:"cached_tokens"`
+	CacheReadTokens     int64    `json:"cache_read_tokens"`
+	CacheCreationTokens int64    `json:"cache_creation_tokens"`
+	ReasoningTokens     int64    `json:"reasoning_tokens"`
+	TotalTokens         int64    `json:"total_tokens"`
+	TotalCost           float64  `json:"total_cost"`
+	AverageLatencyMS    *float64 `json:"average_latency_ms"`
+	ZeroTokenCalls      int64    `json:"zero_token_calls"`
 }
 
 type RollingSummary struct {
@@ -131,36 +133,51 @@ type ModelCostRank struct {
 }
 
 type ChannelHealth struct {
-	AuthIndex        string   `json:"auth_index"`
-	Calls            int64    `json:"calls"`
-	Failures         int64    `json:"failures"`
-	FailureRate      float64  `json:"failure_rate"`
-	SuccessRate      float64  `json:"success_rate"`
-	Tokens           int64    `json:"tokens"`
-	Cost             float64  `json:"cost"`
-	AverageLatencyMS *float64 `json:"average_latency_ms"`
-	Tone             string   `json:"tone"`
+	AuthIndex            string   `json:"auth_index"`
+	Source               string   `json:"source,omitempty"`
+	AccountSnapshot      string   `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot    string   `json:"auth_label_snapshot,omitempty"`
+	AuthProviderSnapshot string   `json:"auth_provider_snapshot,omitempty"`
+	Calls                int64    `json:"calls"`
+	Failures             int64    `json:"failures"`
+	FailureRate          float64  `json:"failure_rate"`
+	SuccessRate          float64  `json:"success_rate"`
+	Tokens               int64    `json:"tokens"`
+	Cost                 float64  `json:"cost"`
+	AverageLatencyMS     *float64 `json:"average_latency_ms"`
+	Tone                 string   `json:"tone"`
 }
 
 type FailureSource struct {
-	SourceHash       string   `json:"source_hash"`
-	AuthIndex        string   `json:"auth_index"`
-	Calls            int64    `json:"calls"`
-	Failures         int64    `json:"failures"`
-	FailureRate      float64  `json:"failure_rate"`
-	LastSeenMS       int64    `json:"last_seen_ms"`
-	AverageLatencyMS *float64 `json:"average_latency_ms"`
-	Tone             string   `json:"tone"`
+	Source               string   `json:"source,omitempty"`
+	SourceHash           string   `json:"source_hash"`
+	AuthIndex            string   `json:"auth_index"`
+	AccountSnapshot      string   `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot    string   `json:"auth_label_snapshot,omitempty"`
+	AuthProviderSnapshot string   `json:"auth_provider_snapshot,omitempty"`
+	Calls                int64    `json:"calls"`
+	Failures             int64    `json:"failures"`
+	FailureRate          float64  `json:"failure_rate"`
+	LastSeenMS           int64    `json:"last_seen_ms"`
+	AverageLatencyMS     *float64 `json:"average_latency_ms"`
+	Tone                 string   `json:"tone"`
 }
 
 type RecentFailure struct {
-	TimestampMS int64  `json:"timestamp_ms"`
-	Model       string `json:"model"`
-	APIKeyHash  string `json:"api_key_hash"`
-	SourceHash  string `json:"source_hash"`
-	AuthIndex   string `json:"auth_index"`
-	Endpoint    string `json:"endpoint"`
-	DurationMS  *int64 `json:"duration_ms"`
+	TimestampMS           int64  `json:"timestamp_ms"`
+	Model                 string `json:"model"`
+	APIKeyHash            string `json:"api_key_hash"`
+	Source                string `json:"source,omitempty"`
+	SourceHash            string `json:"source_hash"`
+	AuthIndex             string `json:"auth_index"`
+	AccountSnapshot       string `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot     string `json:"auth_label_snapshot,omitempty"`
+	AuthProviderSnapshot  string `json:"auth_provider_snapshot,omitempty"`
+	AuthProjectIDSnapshot string `json:"auth_project_id_snapshot,omitempty"`
+	Endpoint              string `json:"endpoint"`
+	DurationMS            *int64 `json:"duration_ms"`
+	FailStatusCode        *int64 `json:"fail_status_code,omitempty"`
+	FailSummary           string `json:"fail_summary,omitempty"`
 }
 
 type SummaryResponse struct {
@@ -275,18 +292,20 @@ func (s *Service) Summary(ctx context.Context, p SummaryParams) (SummaryResponse
 
 func buildTodaySummary(agg store.Aggregate, modelStats []store.ModelStat, prices map[string]store.ModelPrice) TodaySummary {
 	return TodaySummary{
-		TotalCalls:       agg.TotalCalls,
-		SuccessCalls:     agg.SuccessCalls,
-		FailureCalls:     agg.FailureCalls,
-		SuccessRate:      rate(agg.SuccessCalls, agg.TotalCalls),
-		InputTokens:      agg.InputTokens,
-		OutputTokens:     agg.OutputTokens,
-		CachedTokens:     agg.CachedTokens,
-		ReasoningTokens:  agg.ReasoningTokens,
-		TotalTokens:      agg.TotalTokens,
-		TotalCost:        totalCost(modelStats, prices),
-		AverageLatencyMS: nullableFloat(agg.AvgLatencyMS.Valid, agg.AvgLatencyMS.Float64),
-		ZeroTokenCalls:   agg.ZeroTokenCalls,
+		TotalCalls:          agg.TotalCalls,
+		SuccessCalls:        agg.SuccessCalls,
+		FailureCalls:        agg.FailureCalls,
+		SuccessRate:         rate(agg.SuccessCalls, agg.TotalCalls),
+		InputTokens:         agg.InputTokens,
+		OutputTokens:        agg.OutputTokens,
+		CachedTokens:        agg.CachedTokens,
+		CacheReadTokens:     agg.CacheReadTokens,
+		CacheCreationTokens: agg.CacheCreationTokens,
+		ReasoningTokens:     agg.ReasoningTokens,
+		TotalTokens:         agg.TotalTokens,
+		TotalCost:           totalCost(modelStats, prices),
+		AverageLatencyMS:    nullableFloat(agg.AvgLatencyMS.Valid, agg.AvgLatencyMS.Float64),
+		ZeroTokenCalls:      agg.ZeroTokenCalls,
 	}
 }
 
@@ -428,12 +447,15 @@ func requestHealthTone(calls int64, failureRate float64, future bool) string {
 }
 
 func buildTokenMix(today TodaySummary) []TokenMixSegment {
-	total := today.InputTokens + today.OutputTokens + today.ReasoningTokens + today.CachedTokens
+	total := today.InputTokens + today.OutputTokens + today.ReasoningTokens +
+		today.CachedTokens + today.CacheReadTokens + today.CacheCreationTokens
 	return []TokenMixSegment{
 		{Key: "input", Tokens: today.InputTokens, Share: rate(today.InputTokens, total)},
 		{Key: "output", Tokens: today.OutputTokens, Share: rate(today.OutputTokens, total)},
 		{Key: "reasoning", Tokens: today.ReasoningTokens, Share: rate(today.ReasoningTokens, total)},
 		{Key: "cached", Tokens: today.CachedTokens, Share: rate(today.CachedTokens, total)},
+		{Key: "cache_read", Tokens: today.CacheReadTokens, Share: rate(today.CacheReadTokens, total)},
+		{Key: "cache_creation", Tokens: today.CacheCreationTokens, Share: rate(today.CacheCreationTokens, total)},
 	}
 }
 
@@ -482,9 +504,16 @@ func buildChannelHealth(stats []store.ChannelModelStat, prices map[string]store.
 		}
 		entry := grouped[authIndex]
 		if entry == nil {
-			entry = &accumulator{row: ChannelHealth{AuthIndex: authIndex}}
+			entry = &accumulator{row: ChannelHealth{
+				AuthIndex:            authIndex,
+				Source:               stat.Source,
+				AccountSnapshot:      stat.AccountSnapshot,
+				AuthLabelSnapshot:    stat.AuthLabelSnapshot,
+				AuthProviderSnapshot: stat.AuthProviderSnapshot,
+			}}
 			grouped[authIndex] = entry
 		}
+		fillChannelHealthSnapshots(&entry.row, stat)
 		entry.row.Calls += stat.Calls
 		entry.row.Failures += stat.FailureCalls
 		entry.row.Tokens += stat.TotalTokens
@@ -533,14 +562,18 @@ func buildFailureSources(stats []store.FailureSourceStat, limit int) []FailureSo
 			tone = "bad"
 		}
 		rows = append(rows, FailureSource{
-			SourceHash:       stat.SourceHash,
-			AuthIndex:        stat.AuthIndex,
-			Calls:            stat.Calls,
-			Failures:         stat.FailureCalls,
-			FailureRate:      failureRate,
-			LastSeenMS:       stat.LastSeenMS,
-			AverageLatencyMS: nullableFloat(stat.AvgLatencyMS.Valid, stat.AvgLatencyMS.Float64),
-			Tone:             tone,
+			Source:               stat.Source,
+			SourceHash:           stat.SourceHash,
+			AuthIndex:            stat.AuthIndex,
+			AccountSnapshot:      stat.AccountSnapshot,
+			AuthLabelSnapshot:    stat.AuthLabelSnapshot,
+			AuthProviderSnapshot: stat.AuthProviderSnapshot,
+			Calls:                stat.Calls,
+			Failures:             stat.FailureCalls,
+			FailureRate:          failureRate,
+			LastSeenMS:           stat.LastSeenMS,
+			AverageLatencyMS:     nullableFloat(stat.AvgLatencyMS.Valid, stat.AvgLatencyMS.Float64),
+			Tone:                 tone,
 		})
 	}
 	if limit > 0 && len(rows) > limit {
@@ -549,17 +582,39 @@ func buildFailureSources(stats []store.FailureSourceStat, limit int) []FailureSo
 	return rows
 }
 
+func fillChannelHealthSnapshots(row *ChannelHealth, stat store.ChannelModelStat) {
+	if row.Source == "" {
+		row.Source = stat.Source
+	}
+	if row.AccountSnapshot == "" {
+		row.AccountSnapshot = stat.AccountSnapshot
+	}
+	if row.AuthLabelSnapshot == "" {
+		row.AuthLabelSnapshot = stat.AuthLabelSnapshot
+	}
+	if row.AuthProviderSnapshot == "" {
+		row.AuthProviderSnapshot = stat.AuthProviderSnapshot
+	}
+}
+
 func buildRecentFailures(failures []store.RecentFailure) []RecentFailure {
 	result := make([]RecentFailure, 0, len(failures))
 	for _, failure := range failures {
 		result = append(result, RecentFailure{
-			TimestampMS: failure.TimestampMS,
-			Model:       failure.Model,
-			APIKeyHash:  failure.APIKeyHash,
-			SourceHash:  failure.SourceHash,
-			AuthIndex:   failure.AuthIndex,
-			Endpoint:    failure.Endpoint,
-			DurationMS:  nullableInt(failure.LatencyMS.Valid, failure.LatencyMS.Int64),
+			TimestampMS:           failure.TimestampMS,
+			Model:                 failure.Model,
+			APIKeyHash:            failure.APIKeyHash,
+			Source:                failure.Source,
+			SourceHash:            failure.SourceHash,
+			AuthIndex:             failure.AuthIndex,
+			AccountSnapshot:       failure.AccountSnapshot,
+			AuthLabelSnapshot:     failure.AuthLabelSnapshot,
+			AuthProviderSnapshot:  failure.AuthProviderSnapshot,
+			AuthProjectIDSnapshot: failure.AuthProjectIDSnapshot,
+			Endpoint:              failure.Endpoint,
+			DurationMS:            nullableInt(failure.LatencyMS.Valid, failure.LatencyMS.Int64),
+			FailStatusCode:        nullableInt(failure.FailStatusCode.Valid, failure.FailStatusCode.Int64),
+			FailSummary:           failure.FailSummary,
 		})
 	}
 	return result
@@ -612,9 +667,11 @@ func costForStat(stat store.ModelStat, prices map[string]store.ModelPrice) float
 		model = stat.Model
 	}
 	return pricing.CostForModel(model, pricing.ModelTokens{
-		InputTokens:  stat.InputTokens,
-		OutputTokens: stat.OutputTokens,
-		CachedTokens: stat.CachedTokens,
+		InputTokens:         stat.InputTokens,
+		OutputTokens:        stat.OutputTokens,
+		CachedTokens:        stat.CachedTokens,
+		CacheReadTokens:     stat.CacheReadTokens,
+		CacheCreationTokens: stat.CacheCreationTokens,
 	}, prices)
 }
 
@@ -624,9 +681,11 @@ func costForChannelStat(stat store.ChannelModelStat, prices map[string]store.Mod
 		model = stat.Model
 	}
 	return pricing.CostForModel(model, pricing.ModelTokens{
-		InputTokens:  stat.InputTokens,
-		OutputTokens: stat.OutputTokens,
-		CachedTokens: stat.CachedTokens,
+		InputTokens:         stat.InputTokens,
+		OutputTokens:        stat.OutputTokens,
+		CachedTokens:        stat.CachedTokens,
+		CacheReadTokens:     stat.CacheReadTokens,
+		CacheCreationTokens: stat.CacheCreationTokens,
 	}, prices)
 }
 

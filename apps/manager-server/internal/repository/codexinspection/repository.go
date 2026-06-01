@@ -50,9 +50,9 @@ func (r *repository) CreateRun(ctx context.Context, run model.CodexInspectionRun
 		`insert into codex_inspection_runs (
 			trigger_type, trigger_key, status, started_at_ms, finished_at_ms,
 			total_files, probe_set_count, sampled_count, disabled_count, enabled_count,
-			delete_count, disable_count, enable_count, keep_count, error,
+			delete_count, disable_count, enable_count, reauth_count, keep_count, error,
 			settings_json, created_at_ms, updated_at_ms
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.TriggerType,
 		nullString(run.TriggerKey),
 		run.Status,
@@ -66,6 +66,7 @@ func (r *repository) CreateRun(ctx context.Context, run model.CodexInspectionRun
 		run.DeleteCount,
 		run.DisableCount,
 		run.EnableCount,
+		run.ReauthCount,
 		run.KeepCount,
 		nullString(run.Error),
 		run.SettingsJSON,
@@ -104,6 +105,7 @@ func (r *repository) UpdateRun(ctx context.Context, run model.CodexInspectionRun
 			delete_count = ?,
 			disable_count = ?,
 			enable_count = ?,
+			reauth_count = ?,
 			keep_count = ?,
 			error = ?,
 			settings_json = ?,
@@ -119,6 +121,7 @@ func (r *repository) UpdateRun(ctx context.Context, run model.CodexInspectionRun
 		run.DeleteCount,
 		run.DisableCount,
 		run.EnableCount,
+		run.ReauthCount,
 		run.KeepCount,
 		nullString(run.Error),
 		run.SettingsJSON,
@@ -132,6 +135,7 @@ func (r *repository) InsertResult(ctx context.Context, result model.CodexInspect
 	if result.CreatedAtMS <= 0 {
 		result.CreatedAtMS = time.Now().UnixMilli()
 	}
+	result.ActionStatus = model.NormalizeCodexInspectionActionStatus(result.ActionStatus, result.Action)
 	disabled := 0
 	if result.Disabled {
 		disabled = 1
@@ -145,8 +149,9 @@ func (r *repository) InsertResult(ctx context.Context, result model.CodexInspect
 		`insert into codex_inspection_results (
 			run_id, account_key, file_name, display_account, auth_index, account_id,
 			provider, disabled, status, state, action, action_reason, status_code,
-			used_percent, is_quota, error, created_at_ms
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			used_percent, is_quota, error, action_status, executed_action, action_error,
+			created_at_ms
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(run_id, account_key) do update set
 			file_name = excluded.file_name,
 			display_account = excluded.display_account,
@@ -162,6 +167,9 @@ func (r *repository) InsertResult(ctx context.Context, result model.CodexInspect
 			used_percent = excluded.used_percent,
 			is_quota = excluded.is_quota,
 			error = excluded.error,
+			action_status = excluded.action_status,
+			executed_action = excluded.executed_action,
+			action_error = excluded.action_error,
 			created_at_ms = excluded.created_at_ms`,
 		result.RunID,
 		result.AccountKey,
@@ -179,6 +187,9 @@ func (r *repository) InsertResult(ctx context.Context, result model.CodexInspect
 		nullFloat(result.UsedPercent),
 		isQuota,
 		nullString(result.Error),
+		nullString(result.ActionStatus),
+		nullString(result.ExecutedAction),
+		nullString(result.ActionError),
 		result.CreatedAtMS,
 	)
 	if err != nil {
@@ -225,7 +236,7 @@ func (r *repository) ListRuns(ctx context.Context, limit int) ([]model.CodexInsp
 		`select
 			id, trigger_type, trigger_key, status, started_at_ms, finished_at_ms,
 			total_files, probe_set_count, sampled_count, disabled_count, enabled_count,
-			delete_count, disable_count, enable_count, keep_count, error,
+			delete_count, disable_count, enable_count, reauth_count, keep_count, error,
 			settings_json, created_at_ms, updated_at_ms
 		from codex_inspection_runs
 		order by started_at_ms desc, id desc
@@ -254,7 +265,7 @@ func (r *repository) GetRun(ctx context.Context, id int64) (model.CodexInspectio
 		`select
 			id, trigger_type, trigger_key, status, started_at_ms, finished_at_ms,
 			total_files, probe_set_count, sampled_count, disabled_count, enabled_count,
-			delete_count, disable_count, enable_count, keep_count, error,
+			delete_count, disable_count, enable_count, reauth_count, keep_count, error,
 			settings_json, created_at_ms, updated_at_ms
 		from codex_inspection_runs
 		where id = ?`,
@@ -276,7 +287,7 @@ func (r *repository) GetLatestRunByTrigger(ctx context.Context, triggerType, tri
 		`select
 			id, trigger_type, trigger_key, status, started_at_ms, finished_at_ms,
 			total_files, probe_set_count, sampled_count, disabled_count, enabled_count,
-			delete_count, disable_count, enable_count, keep_count, error,
+			delete_count, disable_count, enable_count, reauth_count, keep_count, error,
 			settings_json, created_at_ms, updated_at_ms
 		from codex_inspection_runs
 		where trigger_type = ? and trigger_key = ?
@@ -301,7 +312,8 @@ func (r *repository) ListResults(ctx context.Context, runID int64) ([]model.Code
 		`select
 			id, run_id, account_key, file_name, display_account, auth_index, account_id,
 			provider, disabled, status, state, action, action_reason, status_code,
-			used_percent, is_quota, error, created_at_ms
+			used_percent, is_quota, error, action_status, executed_action, action_error,
+			created_at_ms
 		from codex_inspection_results
 		where run_id = ?
 		order by file_name asc, display_account asc, id asc`,
@@ -371,6 +383,7 @@ func scanRun(row scanner) (model.CodexInspectionRun, error) {
 		&run.DeleteCount,
 		&run.DisableCount,
 		&run.EnableCount,
+		&run.ReauthCount,
 		&run.KeepCount,
 		&errorText,
 		&run.SettingsJSON,
@@ -391,6 +404,7 @@ func scanRun(row scanner) (model.CodexInspectionRun, error) {
 func scanResult(row scanner) (model.CodexInspectionResult, error) {
 	var result model.CodexInspectionResult
 	var authIndex, accountID, provider, status, state, actionReason, errorText sql.NullString
+	var actionStatus, executedAction, actionError sql.NullString
 	var statusCode sql.NullInt64
 	var usedPercent sql.NullFloat64
 	var disabled, isQuota int
@@ -412,6 +426,9 @@ func scanResult(row scanner) (model.CodexInspectionResult, error) {
 		&usedPercent,
 		&isQuota,
 		&errorText,
+		&actionStatus,
+		&executedAction,
+		&actionError,
 		&result.CreatedAtMS,
 	); err != nil {
 		return model.CodexInspectionResult{}, err
@@ -425,6 +442,9 @@ func scanResult(row scanner) (model.CodexInspectionResult, error) {
 	result.ActionReason = actionReason.String
 	result.IsQuota = isQuota != 0
 	result.Error = errorText.String
+	result.ActionStatus = model.NormalizeCodexInspectionActionStatus(actionStatus.String, result.Action)
+	result.ExecutedAction = executedAction.String
+	result.ActionError = actionError.String
 	if statusCode.Valid {
 		value := int(statusCode.Int64)
 		result.StatusCode = &value
