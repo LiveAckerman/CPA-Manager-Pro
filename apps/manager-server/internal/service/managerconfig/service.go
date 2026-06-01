@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/cparuntime"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	collectorservice "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/collector"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpa"
@@ -124,6 +125,9 @@ func (s *Service) Update(ctx context.Context, submitted store.ManagerConfig) (Re
 	if err := s.store.SaveSetup(ctx, setup); err != nil {
 		return Response{}, err
 	}
+	// Re-sync the CPA connection to image-service's tmpfs config whenever
+	// the operator updates it in the panel (single source of truth).
+	_ = cparuntime.Sync(setup)
 	if ManagerCollectorEnabled(next) {
 		_ = s.collector.Start(context.Background(), next)
 	} else {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/cparuntime"
 	collectorservice "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/collector"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpa"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/managerconfig"
@@ -182,6 +183,9 @@ func (s *Service) Setup(ctx context.Context, req Request, _ string) (Result, err
 	if err := s.store.SaveSetup(ctx, setup); err != nil {
 		return Result{}, err
 	}
+	// Share the new CPA connection with image-service (tmpfs file) so it
+	// works without duplicate CPA_BASE_URL / CPA_MANAGEMENT_KEY env vars.
+	_ = cparuntime.Sync(setup)
 	if err := s.store.SaveManagerConfig(ctx, managerCfg); err != nil {
 		return Result{}, err
 	}

@@ -6,9 +6,14 @@
 # (written by the init-auth-key oneshot) and exports it as CHATGPT2API_AUTH_KEY.
 # Process-local export means `docker exec ... env` never sees the secret.
 #
-# Env vars expected (set in docker-compose / .env.dev):
-#   CPA_BASE_URL          — CPA upstream URL (account_service pulls token list)
-#   CPA_MANAGEMENT_KEY    — CPA Management Key
+# CPA connection (CPA_BASE_URL / CPA_MANAGEMENT_KEY) is OPTIONAL here:
+# manager-server writes the wizard-entered connection to
+# /run/cpa_runtime.json, which image-service's config reads as a fallback.
+# Set the env vars only to override that (they take precedence).
+#
+# Env vars:
+#   CPA_BASE_URL          — (optional) CPA upstream URL override
+#   CPA_MANAGEMENT_KEY    — (optional) CPA Management Key override
 #   CHATGPT2API_DATA_DIR  — persistent dir for saved PNGs (default /data/chatgpt-image)
 exec 2>&1
 

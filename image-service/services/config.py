@@ -6,8 +6,28 @@ needs a handful of properties; everything else is dropped.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+
+
+# Runtime CPA config dropped by manager-server (Go) after the web setup
+# wizard saves the connection — see internal/cparuntime. Lets image-service
+# share the SAME CPA the operator entered in the panel instead of requiring
+# duplicate CPA_BASE_URL / CPA_MANAGEMENT_KEY env vars. tmpfs, root-only.
+_CPA_RUNTIME_PATH = os.environ.get("CPA_RUNTIME_CONFIG_PATH", "/run/cpa_runtime.json")
+
+
+def _read_cpa_runtime() -> dict:
+    """Best-effort read of the manager-server-written CPA runtime config.
+    Returns {} if the file is missing/unreadable/not-yet-written — callers
+    then fall back to env vars (or treat CPA as not-configured)."""
+    try:
+        with open(_CPA_RUNTIME_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def _env_int(key: str, default: int) -> int:
@@ -35,8 +55,25 @@ class _Config:
     auth_key: str = os.environ.get("CHATGPT2API_AUTH_KEY", "").strip()
 
     # ---- CPA upstream the account_service reads tokens from ----
-    cpa_base_url: str = os.environ.get("CPA_BASE_URL", "").strip()
-    cpa_management_key: str = os.environ.get("CPA_MANAGEMENT_KEY", "").strip()
+    # Resolved dynamically (not frozen at import) so a manager-server config
+    # change picks up without restarting image-service. Precedence:
+    #   1. CPA_BASE_URL / CPA_MANAGEMENT_KEY env vars (explicit override)
+    #   2. /run/cpa_runtime.json written by manager-server from the web wizard
+    # This is why the operator no longer needs to set these env vars at all —
+    # the panel's setup wizard is the single source of truth.
+    @property
+    def cpa_base_url(self) -> str:
+        env = os.environ.get("CPA_BASE_URL", "").strip()
+        if env:
+            return env
+        return str(_read_cpa_runtime().get("cpa_base_url", "")).strip()
+
+    @property
+    def cpa_management_key(self) -> str:
+        env = os.environ.get("CPA_MANAGEMENT_KEY", "").strip()
+        if env:
+            return env
+        return str(_read_cpa_runtime().get("cpa_management_key", "")).strip()
 
     # ---- image-gen polling cadence (consumed by openai_backend_api &
     #      conversation.stream_image_outputs) ----
