@@ -322,6 +322,51 @@ class AccountService:
                 self._refresh_file_list_now()
             except Exception as exc:
                 logger.warning("periodic CPA refresh failed: %s", exc)
+            try:
+                self._refresh_session_tokens()
+            except Exception as exc:
+                logger.warning("periodic session re-mint failed: %s", exc)
+
+    def _refresh_session_tokens(self) -> None:
+        """Keep session-cookie accounts' tokens fresh even when they're not
+        picked for image gen or inspected — re-mint from the cookie when the
+        token is within the re-mint margin of expiry (or unknown). Each mint
+        also writes the live token back to CPA (see _mint_session_token), so
+        server-side inspection and CPA direct usage never see a stale token
+        on an idle session account. Bounded + best-effort per account."""
+        from services.openai_backend_api import InvalidAccessTokenError
+        now = time.time()
+        with self._lock:
+            self._load_session_cookies_locked()
+            due = []
+            for file_name, entry in self._session_cookies.items():
+                cookie = (entry or {}).get("cookie")
+                if not cookie:
+                    continue
+                acct = self._accounts.get(file_name)
+                if acct is None:
+                    continue
+                if not acct.access_token or acct.token_exp - now <= SESSION_REMINT_MARGIN_SECS:
+                    due.append((file_name, cookie))
+        for file_name, cookie in due:
+            try:
+                result = self._mint_session_token(file_name, cookie)
+                token = result["access_token"]
+                with self._lock:
+                    a = self._accounts.get(file_name)
+                    if a is not None:
+                        a.access_token = token
+                        a.token_exp = _jwt_exp(token)
+                        a.status = "active"
+                        a.needs_relogin = False
+            except InvalidAccessTokenError:
+                with self._lock:
+                    a = self._accounts.get(file_name)
+                    if a is not None:
+                        a.needs_relogin = True
+                logger.info("session cookie dead on re-mint: %s", file_name)
+            except Exception as exc:
+                logger.warning("session re-mint error for %s: %s", file_name, exc)
 
     # ----- diagnostics -----
 
@@ -426,16 +471,30 @@ class AccountService:
             }
             self._save_session_cookies_locked()
 
-        # If the extension already grabbed a token, trust it (saves a call);
-        # otherwise mint one from the cookie now to validate the cookie works.
+        # Always mint a fresh token from the cookie rather than trusting the
+        # access_token the extension passed. We learned the hard way that a
+        # browser login on an MFA account can hand back a password-only
+        # (amr=['pwd']) token that OpenAI then invalidates, while the cookie
+        # mints the proper MFA (amr=['otp','mfa']) token that actually works.
+        # Minting here also triggers the write-back of that good token into
+        # CPA (see _mint_session_token), fixing server-side inspection. The
+        # `access_token` arg is now only a last-resort fallback.
         from services.openai_backend_api import InvalidAccessTokenError
-        token = (access_token or "").strip()
+        token = ""
         minted_email = ""
         try:
-            if not token:
+            try:
                 result = self._mint_session_token(file_name, cookie)
                 token = result["access_token"]
                 minted_email = result.get("email", "")
+            except InvalidAccessTokenError:
+                raise
+            except Exception:
+                # Network hiccup minting — fall back to the extension's token
+                # if it gave one, so the import isn't a total loss.
+                token = (access_token or "").strip()
+                if not token:
+                    raise
             with self._lock:
                 acct = self._accounts.get(file_name)
                 if acct is not None:
@@ -457,8 +516,11 @@ class AccountService:
 
     def _mint_session_token(self, file_name: str, cookie: str) -> dict[str, Any]:
         """Call /api/auth/session with the cookie to mint a fresh token.
-        NOT lock-held (does HTTP). On success persists the rolled cookie.
-        Raises InvalidAccessTokenError if the cookie is dead."""
+        NOT lock-held (does HTTP). On success persists the rolled cookie AND
+        writes the fresh token back into the CPA auth file (so server-side
+        inspection / CPA direct usage see a live token, not the dead one the
+        browser-login may have left). Raises InvalidAccessTokenError if the
+        cookie is dead."""
         from services.openai_backend_api import OpenAIBackendAPI
         result = OpenAIBackendAPI().fetch_session(cookie)
         rolled = result.get("session_cookie") or cookie
@@ -468,6 +530,10 @@ class AccountService:
                 entry["cookie"] = rolled
                 entry["updated_at"] = time.time()
                 self._save_session_cookies_locked()
+        # Push the live token back to CPA (best-effort, never raises).
+        token = result.get("access_token") or ""
+        if token:
+            self._sync_token_to_cpa(file_name, token)
         return result
 
     def needs_relogin_list(self) -> list[dict[str, Any]]:
@@ -595,6 +661,36 @@ class AccountService:
                         "error": f"network error: {result['_network_error']}",
                     }
                 status_code = int((result or {}).get("status_code") or 0)
+
+        # 401 even after a fresh CPA token: if this is a session-cookie
+        # account, the CPA token is moot — try minting from the cookie and
+        # re-probe. A session-managed account whose cookie still works is
+        # HEALTHY (image-service uses the cookie token, not CPA's), so it
+        # must NOT be flagged for delete. This is what stops the inspection
+        # from false-positiving on MFA accounts kept alive via cookie.
+        if status_code == 401:
+            with self._lock:
+                self._load_session_cookies_locked()
+                entry = self._session_cookies.get(file_name)
+            cookie = (entry or {}).get("cookie") if entry else None
+            if cookie:
+                from services.openai_backend_api import InvalidAccessTokenError
+                try:
+                    minted = self._mint_session_token(file_name, cookie)
+                    token = minted["access_token"]
+                    result = _probe_once(token)
+                    if result is not None and result.get("_network_error"):
+                        return {
+                            "status_code": 0, "body": None, "body_text": "",
+                            "has_status_code": False, "needs_reauth": False,
+                            "error": f"network error: {result['_network_error']}",
+                        }
+                    status_code = int((result or {}).get("status_code") or 0)
+                except InvalidAccessTokenError:
+                    # Cookie is also dead → genuinely needs browser re-login.
+                    pass
+                except Exception as exc:
+                    logger.warning("probe cookie-mint failed for %s: %s", file_name, exc)
 
         # 401 after a fresh-token retry = the credential itself is dead.
         needs_reauth = status_code == 401
@@ -936,6 +1032,67 @@ class AccountService:
         if not token:
             raise RuntimeError(f"CPA download {file_name}: no access_token in response")
         return token
+
+    def _download_auth_file_from_cpa(self, file_name: str) -> dict[str, Any]:
+        """Download the FULL auth-file JSON (not just the token) so we can
+        update one field and write it back without clobbering the rest."""
+        url = config.cpa_base_url.rstrip("/") + "/v0/management/auth-files/download"
+        r = self._cpa_session.get(
+            url,
+            params={"name": file_name},
+            headers={"Authorization": f"Bearer {config.cpa_management_key}"},
+            timeout=15,
+        )
+        if r.status_code // 100 != 2:
+            raise RuntimeError(f"CPA download {file_name} failed: HTTP {r.status_code}")
+        body = r.json() or {}
+        if not isinstance(body, dict):
+            raise RuntimeError(f"CPA download {file_name}: unexpected body type")
+        return body
+
+    def _write_auth_file_to_cpa(self, file_name: str, auth_json: dict[str, Any]) -> None:
+        """Overwrite an auth file in CPA by re-uploading it under the SAME
+        name (multipart POST /v0/management/auth-files). Same filename ==
+        CPA overwrites in place, so no duplicate is created."""
+        import json as _json
+        url = config.cpa_base_url.rstrip("/") + "/v0/management/auth-files"
+        payload = _json.dumps(auth_json).encode("utf-8")
+        files = {"file": (file_name, payload, "application/json")}
+        r = self._cpa_session.post(
+            url,
+            files=files,
+            headers={"Authorization": f"Bearer {config.cpa_management_key}"},
+            timeout=20,
+        )
+        if r.status_code // 100 != 2:
+            raise RuntimeError(f"CPA upload {file_name} failed: HTTP {r.status_code}")
+
+    def _sync_token_to_cpa(self, file_name: str, access_token: str) -> bool:
+        """Write a freshly-minted (cookie-derived) access_token back into the
+        account's CPA auth file, overwriting whatever stale/dead token was
+        there. This is what makes session-cookie accounts visible as healthy
+        to server-side inspection and direct CPA usage — not just to
+        image-service's own pool. Best-effort: returns False (logged) on any
+        failure so a CPA hiccup never breaks the mint path.
+
+        The refresh_token (if any) is left as-is; CPA never successfully uses
+        it for these accounts anyway, and image-service keeps the
+        access_token fresh from the cookie every ~8 days."""
+        try:
+            auth = self._download_auth_file_from_cpa(file_name)
+            # Update the access_token wherever CPA keeps it.
+            if "access_token" in auth or "token" not in auth:
+                auth["access_token"] = access_token
+            else:
+                auth["token"] = access_token
+            if isinstance(auth.get("tokens"), dict):
+                auth["tokens"]["access_token"] = access_token
+            self._write_auth_file_to_cpa(file_name, auth)
+            logger.info("synced cookie-minted token back to CPA: %s", file_name)
+            return True
+        except Exception as exc:
+            logger.warning("failed to sync token to CPA for %s: %s", file_name, exc)
+            return False
 
     def _pick_locked(self) -> _AccountState | None:
         """Lock-held; picks the best account or returns None.

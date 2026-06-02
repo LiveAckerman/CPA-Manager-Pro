@@ -100,12 +100,17 @@ def test_fetch_session_200_empty_token_is_dead(monkeypatch):
 
 # --- import_session + needs_relogin ---------------------------------------
 
-def test_import_session_with_provided_token(tmp_path, monkeypatch):
+def test_import_session_mints_from_cookie(tmp_path, monkeypatch):
+    # import_session ALWAYS mints from the cookie (the extension's provided
+    # token can be an invalidated pwd-only one) — stub the mint to avoid HTTP.
     svc = _svc(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        svc, "_mint_session_token",
+        lambda fn, cookie: {"access_token": "minted-tok", "email": "able@duck.com", "session_cookie": cookie},
+    )
     res = svc.import_session("codex-a@x.com-free.json", "cookie-val", access_token="h.p.s")
     assert res["ok"] is True
-    items = svc.list_accounts_redacted()
-    a = next(i for i in items if i["file_name"] == "codex-a@x.com-free.json")
+    a = next(i for i in svc.list_accounts_redacted() if i["file_name"] == "codex-a@x.com-free.json")
     assert a["session_managed"] is True
     assert a["needs_relogin"] is False
     assert a["status"] == "active"
@@ -147,11 +152,74 @@ def test_import_session_account_not_found(tmp_path, monkeypatch):
 
 def test_cookie_persisted_across_instances(tmp_path, monkeypatch):
     svc = _svc(tmp_path, monkeypatch)
-    svc.import_session("codex-a@x.com-free.json", "persist-cookie", access_token="h.p.s")
+    monkeypatch.setattr(
+        svc, "_mint_session_token",
+        lambda fn, cookie: {"access_token": "minted-tok", "email": "", "session_cookie": cookie},
+    )
+    svc.import_session("codex-a@x.com-free.json", "persist-cookie")
     # New instance loads the same data dir → cookie store survives.
     svc2 = _svc(tmp_path, monkeypatch)
     a = next(i for i in svc2.list_accounts_redacted() if i["file_name"] == "codex-a@x.com-free.json")
     assert a["session_managed"] is True
+
+
+def test_probe_cookie_recovers_session_account(tmp_path, monkeypatch):
+    # MFA account: CPA token is dead (401) but the session cookie still mints
+    # a working token → the inspection probe must report it HEALTHY (200),
+    # NOT flag it for delete. This is the fix for the false-positive on
+    # session-cookie accounts in server/local inspection.
+    svc = _svc(tmp_path, monkeypatch)
+    fn = "codex-a@x.com-free.json"
+    monkeypatch.setattr(
+        svc, "_mint_session_token",
+        lambda f, c: {"access_token": "minted-good", "email": "", "session_cookie": c},
+    )
+    svc.import_session(fn, "good-cookie")  # registers cookie + session-managed
+
+    from services import openai_backend_api as oba
+
+    def fake_usage(self, **kw):
+        ok = self.access_token == "minted-good"
+        return {
+            "status_code": 200 if ok else 401,
+            "body": {} if ok else None,
+            "body_text": "{}" if ok else "invalidated",
+            "has_status_code": True,
+        }
+
+    monkeypatch.setattr(oba.OpenAIBackendAPI, "get_codex_usage", fake_usage)
+    monkeypatch.setattr(svc, "_download_token_from_cpa", lambda f: "dead-cpa-token")
+    svc._accounts[fn].access_token = ""  # force CPA download path
+    res = svc.probe_codex_usage(fn)
+    assert res["status_code"] == 200
+    assert res["needs_reauth"] is False
+    assert svc.needs_relogin_list() == []  # not flagged for re-login
+
+
+def test_probe_cookie_dead_flags_reauth(tmp_path, monkeypatch):
+    # CPA token dead AND cookie dead → genuinely needs browser re-login.
+    svc = _svc(tmp_path, monkeypatch)
+    fn = "codex-a@x.com-free.json"
+    monkeypatch.setattr(
+        svc, "_mint_session_token",
+        lambda f, c: {"access_token": "minted", "email": "", "session_cookie": c},
+    )
+    svc.import_session(fn, "cookie")  # session-managed
+
+    def dead_mint(f, c):
+        raise InvalidAccessTokenError("cookie dead")
+
+    monkeypatch.setattr(svc, "_mint_session_token", dead_mint)
+    from services import openai_backend_api as oba
+    monkeypatch.setattr(
+        oba.OpenAIBackendAPI, "get_codex_usage",
+        lambda self, **kw: {"status_code": 401, "body": None, "body_text": "x", "has_status_code": True},
+    )
+    monkeypatch.setattr(svc, "_download_token_from_cpa", lambda f: "dead")
+    svc._accounts[fn].access_token = ""
+    res = svc.probe_codex_usage(fn)
+    assert res["needs_reauth"] is True
+    assert any(r["file_name"] == fn for r in svc.needs_relogin_list())
 
 
 def test_probe_sets_needs_relogin_on_truly_dead(tmp_path, monkeypatch):
