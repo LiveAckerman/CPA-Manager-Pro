@@ -126,13 +126,6 @@ def create_app() -> FastAPI:
         )
         return result
 
-    @app.get("/api/accounts/needs-relogin")
-    async def needs_relogin_endpoint():
-        # Accounts whose session cookie has died (mint returned 401) — the
-        # Chrome extension targets exactly these for browser re-login,
-        # instead of guessing from raw 401s.
-        return {"items": account_service.needs_relogin_list()}
-
     @app.post("/api/accounts/probe-codex")
     async def probe_codex_endpoint(body: ProbeCodexRequest):
         # Read-only Codex usage probe for codex-inspection.

@@ -601,10 +601,11 @@ class AccountService:
         if needs_reauth:
             self.remove_invalid_token(token, "probe_codex_usage:401")
             # Authoritatively mark this account as needing a browser re-login.
-            # This is what makes GET /v0/image/accounts/needs-relogin useful:
-            # run an inspection (which probes every account through here) and
-            # the truly-dead accounts populate the list for the Chrome
-            # extension to target — instead of it guessing from raw 401s.
+            # The inspection probes every account through here, so truly-dead
+            # accounts (fresh CPA token still 401s) become action='delete' in
+            # the inspection results — which the Chrome extension reads to find
+            # accounts to re-login. The needs_relogin flag is also surfaced on
+            # the /v0/image/accounts list for the panel.
             with self._lock:
                 a = self._accounts.get(file_name)
                 if a is not None:
