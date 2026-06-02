@@ -46,10 +46,10 @@ import (
 
 const (
 	// maxRequestBytes caps how much of an inbound /v1/images/* body we'll
-	// buffer. We must buffer to replay the request on fallback. 32 MiB
-	// covers a 4K input PNG with headroom while still protecting the proxy
-	// from accidental gigabyte uploads.
-	maxRequestBytes = 32 * 1024 * 1024
+	// buffer. We must buffer to replay the request on fallback. 50 MiB
+	// comfortably covers high-res / multi-reference image-edit uploads
+	// while still protecting the proxy from accidental gigabyte uploads.
+	maxRequestBytes = 50 * 1024 * 1024
 
 	// requestTimeout bounds the wall-clock time for a single upstream
 	// attempt. Image generation is slow; 5 minutes accommodates the worst
