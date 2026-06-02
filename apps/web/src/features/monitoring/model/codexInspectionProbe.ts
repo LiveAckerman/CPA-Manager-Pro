@@ -307,18 +307,15 @@ export const inspectSingleAccount = async (
       };
     }
 
-    // Safe-path 401 = authoritative "dead account". image-service only
-    // returns needs_reauth after it ALREADY re-downloaded a fresh token
-    // from CPA and that fresh token ALSO 401'd — meaning the underlying
-    // refresh_token is revoked (OpenAI app_session_terminated). The
-    // account cannot be recovered without a full browser re-login + auth
-    // file re-import, so flag it as actionable.
-    //
-    // We surface this as `delete` (it shows up in the 建议删除 bucket so
-    // the operator can batch-clear dead files) while keeping needsReauth
-    // set so the reason text explains it's a re-auth situation, not a
-    // quota/policy failure. If the account is already disabled, keep it —
-    // no point deleting something the operator already parked.
+    // Safe-path 401 = authoritative "dead token, account likely fine".
+    // image-service only returns needs_reauth after it ALREADY re-downloaded
+    // a fresh token from CPA and that fresh token ALSO 401'd. For MFA/2FA
+    // accounts this is NOT a ban — the account logs in fine at chatgpt.com,
+    // it just can't use the OAuth refresh flow. So the right action is
+    // `reauth` (re-login in a browser + import the session cookie via the
+    // Chrome extension → POST /v0/image/accounts/import-session), NOT delete.
+    // Surfacing this as `reauth` keeps these revivable accounts out of the
+    // 建议删除 bucket so they don't get batch-deleted by mistake.
     if (result.needsReauth) {
       if (account.disabled) {
         onLog?.(
@@ -337,13 +334,13 @@ export const inspectSingleAccount = async (
         };
       }
       onLog?.(
-        'error',
-        `${account.displayAccount} -> delete (HTTP 401 · 认证已失效，需重新登录)`
+        'warning',
+        `${account.displayAccount} -> reauth (HTTP 401 · 认证失效，可浏览器重新登录后导入 cookie 复活)`
       );
       return {
         ...account,
-        action: 'delete',
-        actionReason: '认证已失效：CPA 重新下载 token 后仍返回 401，需在浏览器重新登录并重新导入，建议删除',
+        action: 'reauth',
+        actionReason: '认证已失效：CPA 重新下载 token 后仍返回 401。账号未必被封（多为需要二次验证），可在浏览器重新登录后用扩展导入 session cookie 复活，无需删除',
         statusCode: result.statusCode,
         usedPercent: null,
         isQuota: false,
