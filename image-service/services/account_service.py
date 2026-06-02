@@ -600,15 +600,28 @@ class AccountService:
         needs_reauth = status_code == 401
         if needs_reauth:
             self.remove_invalid_token(token, "probe_codex_usage:401")
+            # Authoritatively mark this account as needing a browser re-login.
+            # This is what makes GET /v0/image/accounts/needs-relogin useful:
+            # run an inspection (which probes every account through here) and
+            # the truly-dead accounts populate the list for the Chrome
+            # extension to target — instead of it guessing from raw 401s.
+            with self._lock:
+                a = self._accounts.get(file_name)
+                if a is not None:
+                    a.needs_relogin = True
         elif status_code and 200 <= status_code < 300:
             # Probe succeeded with this token, so the account is healthy.
-            # Clear any stale "invalid" / "fresh" label and cache the
-            # working token so the panel stops showing a phantom 失效.
+            # Clear any stale "invalid" / "fresh" label and the needs-relogin
+            # flag, and cache the working token so the panel stops showing a
+            # phantom 失效.
             with self._lock:
-                if acct.status in ("fresh", "invalid"):
-                    acct.status = "active"
-                if token:
-                    acct.access_token = token
+                a = self._accounts.get(file_name)
+                if a is not None:
+                    if a.status in ("fresh", "invalid"):
+                        a.status = "active"
+                    if token:
+                        a.access_token = token
+                    a.needs_relogin = False
 
         return {
             "status_code": status_code,

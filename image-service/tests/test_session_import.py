@@ -154,6 +154,34 @@ def test_cookie_persisted_across_instances(tmp_path, monkeypatch):
     assert a["session_managed"] is True
 
 
+def test_probe_sets_needs_relogin_on_truly_dead(tmp_path, monkeypatch):
+    # An inspection probe that 401s on a fresh CPA token must flag the
+    # account into needs_relogin_list() so the extension can find it.
+    svc = _svc(tmp_path, monkeypatch)
+    from services import openai_backend_api as oba
+    monkeypatch.setattr(
+        oba.OpenAIBackendAPI, "get_codex_usage",
+        lambda self, **kw: {"status_code": 401, "body": None, "body_text": "", "has_status_code": True},
+    )
+    res = svc.probe_codex_usage("codex-a@x.com-free.json")
+    assert res["needs_reauth"] is True
+    relogin = svc.needs_relogin_list()
+    assert any(r["file_name"] == "codex-a@x.com-free.json" for r in relogin)
+
+
+def test_probe_clears_needs_relogin_on_success(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch)
+    svc._accounts["codex-a@x.com-free.json"].needs_relogin = True  # pre-flag dead
+    from services import openai_backend_api as oba
+    monkeypatch.setattr(
+        oba.OpenAIBackendAPI, "get_codex_usage",
+        lambda self, **kw: {"status_code": 200, "body": {}, "body_text": "{}", "has_status_code": True},
+    )
+    res = svc.probe_codex_usage("codex-a@x.com-free.json")
+    assert res["status_code"] == 200
+    assert svc.needs_relogin_list() == []  # recovered → cleared
+
+
 def test_jwt_exp_parses_real_claim():
     # exp=9999999999 base64url-encoded payload.
     import base64, json
