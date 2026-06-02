@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { ManagerConfig } from '@/services/api/usageService';
 import {
-  getUsageServiceBootstrapToSync,
   resolveManagerCPAConnection,
   resolveManagerBindingStatus,
   resolveManagerRequestAuthKey,
   resolveManagerSaveState,
-  shouldShowMissingManagerAdminKeyError,
 } from './ConfigPage';
 
 const buildManagerConfig = (overrides: Partial<ManagerConfig> = {}): ManagerConfig => ({
@@ -24,42 +22,10 @@ const buildManagerConfig = (overrides: Partial<ManagerConfig> = {}): ManagerConf
     queryLimit: 50000,
   },
   externalUsageService: {
-    enabled: true,
-    serviceBase: 'http://manager.local:18317',
+    enabled: false,
+    serviceBase: '',
   },
   ...overrides,
-});
-
-describe('getUsageServiceBootstrapToSync', () => {
-  it('returns the normalized service base after a successful auto-load', () => {
-    expect(
-      getUsageServiceBootstrapToSync({
-        serviceBase: 'http://usage.local:18317/',
-        usageServiceEnabled: false,
-        usageServiceBase: '',
-      })
-    ).toBe('http://usage.local:18317');
-  });
-
-  it('skips syncing when the bootstrap address is already current', () => {
-    expect(
-      getUsageServiceBootstrapToSync({
-        serviceBase: 'http://usage.local:18317/',
-        usageServiceEnabled: true,
-        usageServiceBase: 'http://usage.local:18317',
-      })
-    ).toBe('');
-  });
-
-  it('skips syncing when the loaded service base is empty', () => {
-    expect(
-      getUsageServiceBootstrapToSync({
-        serviceBase: '   ',
-        usageServiceEnabled: false,
-        usageServiceBase: '',
-      })
-    ).toBe('');
-  });
 });
 
 describe('resolveManagerRequestAuthKey', () => {
@@ -68,34 +34,22 @@ describe('resolveManagerRequestAuthKey', () => {
       resolveManagerRequestAuthKey({
         panelHostedByUsageService: true,
         managementKey: ' cpa-or-admin-key ',
-        managerAdminKey: ' manager-admin-key ',
       })
     ).toBe('cpa-or-admin-key');
   });
 
-  it('prefers the Manager Server admin key for CPA-hosted panels', () => {
+  it('does not use CPA-hosted panel credentials for Manager config requests', () => {
     expect(
       resolveManagerRequestAuthKey({
         panelHostedByUsageService: false,
         managementKey: ' cpa-management-key ',
-        managerAdminKey: ' manager-admin-key ',
-      })
-    ).toBe('manager-admin-key');
-  });
-
-  it('requires a Manager Server admin key for external panels', () => {
-    expect(
-      resolveManagerRequestAuthKey({
-        panelHostedByUsageService: false,
-        managementKey: ' cpa-management-key ',
-        managerAdminKey: '   ',
       })
     ).toBe('');
   });
 });
 
 describe('resolveManagerCPAConnection', () => {
-  it('keeps the saved embedded CPA URL and replaces only the submitted key', () => {
+  it('keeps the saved embedded CPA URL and key when no new key is submitted', () => {
     expect(
       resolveManagerCPAConnection({
         panelHostedByUsageService: true,
@@ -105,29 +59,6 @@ describe('resolveManagerCPAConnection', () => {
             managementKey: 'old-cpa-key',
           },
         }),
-        currentCPAApiBase: 'http://manager.local:18317',
-        submittedCPAManagementKey: ' new-cpa-key ',
-        externalManagementKey: 'manager-admin-key',
-      })
-    ).toEqual({
-      cpaBaseUrl: 'http://saved-cpa.local:8317',
-      managementKey: 'new-cpa-key',
-    });
-  });
-
-  it('keeps the saved embedded CPA key when no replacement key is submitted', () => {
-    expect(
-      resolveManagerCPAConnection({
-        panelHostedByUsageService: true,
-        managerConfig: buildManagerConfig({
-          cpaConnection: {
-            cpaBaseUrl: 'http://saved-cpa.local:8317',
-            managementKey: 'old-cpa-key',
-          },
-        }),
-        currentCPAApiBase: 'http://manager.local:18317',
-        submittedCPAManagementKey: '   ',
-        externalManagementKey: 'manager-admin-key',
       })
     ).toEqual({
       cpaBaseUrl: 'http://saved-cpa.local:8317',
@@ -135,31 +66,55 @@ describe('resolveManagerCPAConnection', () => {
     });
   });
 
-  it('uses the current CPA panel key for external panels unless an override is submitted', () => {
+  it('updates only the saved embedded CPA key when a new key is submitted', () => {
+    expect(
+      resolveManagerCPAConnection({
+        panelHostedByUsageService: true,
+        managerConfig: buildManagerConfig({
+          cpaConnection: {
+            cpaBaseUrl: 'http://saved-cpa.local:8317',
+            managementKey: 'old-cpa-key',
+          },
+        }),
+        managementKeyInput: ' new-cpa-key ',
+      })
+    ).toEqual({
+      cpaBaseUrl: 'http://saved-cpa.local:8317',
+      managementKey: 'new-cpa-key',
+    });
+  });
+
+  it('returns an empty connection when embedded Manager config is not loaded yet', () => {
+    expect(
+      resolveManagerCPAConnection({
+        panelHostedByUsageService: true,
+        managerConfig: null,
+      })
+    ).toEqual({
+      cpaBaseUrl: '',
+      managementKey: '',
+    });
+  });
+
+  it('keeps external panel connections unchanged instead of binding the current CPA', () => {
     expect(
       resolveManagerCPAConnection({
         panelHostedByUsageService: false,
         managerConfig: buildManagerConfig(),
-        currentCPAApiBase: 'http://cpa.local:8317/',
-        submittedCPAManagementKey: '',
-        externalManagementKey: ' current-cpa-key ',
       })
     ).toEqual({
-      cpaBaseUrl: 'http://cpa.local:8317/',
-      managementKey: 'current-cpa-key',
+      cpaBaseUrl: 'http://cpa.local:8317',
+      managementKey: 'management-key',
     });
 
     expect(
       resolveManagerCPAConnection({
         panelHostedByUsageService: false,
-        managerConfig: buildManagerConfig(),
-        currentCPAApiBase: 'http://cpa.local:8317/',
-        submittedCPAManagementKey: ' new-cpa-key ',
-        externalManagementKey: 'current-cpa-key',
+        managerConfig: null,
       })
     ).toEqual({
-      cpaBaseUrl: 'http://cpa.local:8317/',
-      managementKey: 'new-cpa-key',
+      cpaBaseUrl: '',
+      managementKey: '',
     });
   });
 });
@@ -169,87 +124,39 @@ describe('resolveManagerBindingStatus', () => {
     expect(
       resolveManagerBindingStatus({
         panelHostedByUsageService: true,
-        currentCPAApiBase: 'http://cpa.local:8317',
-        managerConfig: null,
       })
     ).toBe('matched');
   });
 
-  it('distinguishes unconfigured, matched, disabled, and mismatched external bindings', () => {
+  it('treats all CPA-hosted panels as unconfigured for Manager binding', () => {
     expect(
       resolveManagerBindingStatus({
         panelHostedByUsageService: false,
-        currentCPAApiBase: 'http://cpa.local:8317',
-        managerConfig: buildManagerConfig({
-          cpaConnection: {
-            cpaBaseUrl: '',
-            managementKey: '',
-          },
-        }),
       })
     ).toBe('unconfigured');
-
-    expect(
-      resolveManagerBindingStatus({
-        panelHostedByUsageService: false,
-        currentCPAApiBase: 'http://cpa.local:8317/',
-        managerConfig: buildManagerConfig(),
-      })
-    ).toBe('matched');
-
-    expect(
-      resolveManagerBindingStatus({
-        panelHostedByUsageService: false,
-        currentCPAApiBase: 'http://cpa.local:8317',
-        managerConfig: buildManagerConfig({
-          externalUsageService: {
-            enabled: false,
-            serviceBase: '',
-          },
-        }),
-      })
-    ).toBe('external_disabled');
-
-    expect(
-      resolveManagerBindingStatus({
-        panelHostedByUsageService: false,
-        currentCPAApiBase: 'http://other-cpa.local:8317',
-        managerConfig: buildManagerConfig(),
-      })
-    ).toBe('mismatched');
   });
 });
 
 describe('resolveManagerSaveState', () => {
-  it('allows saving to validate an external Manager Server admin key by itself', () => {
+  it('allows saving only dirty same-origin Manager Server config', () => {
     expect(
       resolveManagerSaveState({
-        panelHostedByUsageService: false,
-        managerDirty: false,
-        managerNeedsBindingSync: false,
-        managerBindingSyncBlocked: false,
-        managerAdminKey: ' manager-admin-key ',
-        verifiedManagerAdminKey: '',
-        managerServiceTarget: 'http://manager.local:18317/',
+        panelHostedByUsageService: true,
+        managerDirty: true,
       })
     ).toEqual({
-      adminKeyLoadPending: true,
-      adminKeyOnlyPending: true,
+      adminKeyLoadPending: false,
+      adminKeyOnlyPending: false,
       hasPendingSave: true,
       canSave: true,
     });
   });
 
-  it('does not treat an admin key as pending in same-origin Manager Server panels', () => {
+  it('does not create pending saves for clean same-origin Manager Server config', () => {
     expect(
       resolveManagerSaveState({
         panelHostedByUsageService: true,
         managerDirty: false,
-        managerNeedsBindingSync: false,
-        managerBindingSyncBlocked: false,
-        managerAdminKey: ' manager-admin-key ',
-        verifiedManagerAdminKey: '',
-        managerServiceTarget: 'http://manager.local:18317/',
       })
     ).toEqual({
       adminKeyLoadPending: false,
@@ -259,33 +166,11 @@ describe('resolveManagerSaveState', () => {
     });
   });
 
-  it('keeps blocked rebinds disabled until an admin key is provided', () => {
+  it('does not allow Manager config saves from CPA-hosted panels', () => {
     expect(
       resolveManagerSaveState({
         panelHostedByUsageService: false,
-        managerDirty: false,
-        managerNeedsBindingSync: true,
-        managerBindingSyncBlocked: true,
-        managerAdminKey: '',
-        verifiedManagerAdminKey: '',
-        managerServiceTarget: 'http://manager.local:18317',
-      })
-    ).toMatchObject({
-      hasPendingSave: true,
-      canSave: false,
-    });
-  });
-
-  it('stops treating the same validated admin key as a pending load', () => {
-    expect(
-      resolveManagerSaveState({
-        panelHostedByUsageService: false,
-        managerDirty: false,
-        managerNeedsBindingSync: false,
-        managerBindingSyncBlocked: false,
-        managerAdminKey: ' manager-admin-key ',
-        verifiedManagerAdminKey: 'manager-admin-key',
-        managerServiceTarget: 'http://manager.local:18317',
+        managerDirty: true,
       })
     ).toEqual({
       adminKeyLoadPending: false,
@@ -294,46 +179,18 @@ describe('resolveManagerSaveState', () => {
       canSave: false,
     });
   });
-});
 
-describe('shouldShowMissingManagerAdminKeyError', () => {
-  it('shows the missing admin key error for manual external Manager Server loads', () => {
+  it('does not allow Manager config saves while host mode is unknown', () => {
     expect(
-      shouldShowMissingManagerAdminKeyError({
-        panelHostedByUsageService: false,
-        trigger: 'manual',
-        hasManagerConfig: true,
+      resolveManagerSaveState({
+        panelHostedByUsageService: null,
+        managerDirty: true,
       })
-    ).toBe(true);
-  });
-
-  it('does not show the missing admin key error for automatic reloads after config is loaded', () => {
-    expect(
-      shouldShowMissingManagerAdminKeyError({
-        panelHostedByUsageService: false,
-        trigger: 'auto',
-        hasManagerConfig: true,
-      })
-    ).toBe(false);
-  });
-
-  it('still shows the missing admin key error for first automatic external Manager Server load', () => {
-    expect(
-      shouldShowMissingManagerAdminKeyError({
-        panelHostedByUsageService: false,
-        trigger: 'auto',
-        hasManagerConfig: false,
-      })
-    ).toBe(true);
-  });
-
-  it('does not require a Manager Server admin key for same-origin panels', () => {
-    expect(
-      shouldShowMissingManagerAdminKeyError({
-        panelHostedByUsageService: true,
-        trigger: 'manual',
-        hasManagerConfig: false,
-      })
-    ).toBe(false);
+    ).toEqual({
+      adminKeyLoadPending: false,
+      adminKeyOnlyPending: false,
+      hasPendingSave: false,
+      canSave: false,
+    });
   });
 });

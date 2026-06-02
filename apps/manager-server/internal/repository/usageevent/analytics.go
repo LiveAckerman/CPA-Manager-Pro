@@ -162,6 +162,8 @@ type EventPageItem struct {
 	AuthProviderSnapshot  string
 	AuthProjectIDSnapshot string
 	ReasoningEffort       string
+	ServiceTier           string
+	ExecutorType          string
 	InputTokens           int64
 	OutputTokens          int64
 	CachedTokens          int64
@@ -730,6 +732,8 @@ func (r *repository) EventsPageWithFilter(ctx context.Context, filter AnalyticsF
 	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
 	coalesce(auth_project_id_snapshot, ''),
 	coalesce(reasoning_effort, ''),
+	coalesce(service_tier, ''),
+	coalesce(executor_type, ''),
 	input_tokens,
 	output_tokens,
 	`+compatCachedExpr+`,
@@ -772,6 +776,8 @@ limit ?`, args...)
 			&item.AuthProviderSnapshot,
 			&item.AuthProjectIDSnapshot,
 			&item.ReasoningEffort,
+			&item.ServiceTier,
+			&item.ExecutorType,
 			&item.InputTokens,
 			&item.OutputTokens,
 			&item.CachedTokens,
@@ -849,11 +855,11 @@ func analyticsWhere(filter AnalyticsFilter) (string, []any) {
 	if query != "" {
 		like := "%" + query + "%"
 		if hash != "" {
-			conditions = append(conditions, `(lower(coalesce(model, '')) like ? or lower(coalesce(resolved_model, '')) like ? or lower(coalesce(endpoint, '')) like ? or lower(coalesce(source, '')) like ? or lower(coalesce(source_hash, '')) like ? or lower(coalesce(api_key_hash, '')) like ? or lower(coalesce(auth_project_id_snapshot, '')) like ? or lower(coalesce(reasoning_effort, '')) like ? or lower(coalesce(fail_summary, '')) like ? or lower(coalesce(api_key_hash, '')) = ?)`)
-			args = append(args, like, like, like, like, like, like, like, like, like, hash)
+			conditions = append(conditions, `(lower(coalesce(model, '')) like ? or lower(coalesce(resolved_model, '')) like ? or lower(coalesce(endpoint, '')) like ? or lower(coalesce(source, '')) like ? or lower(coalesce(source_hash, '')) like ? or lower(coalesce(api_key_hash, '')) like ? or lower(coalesce(auth_project_id_snapshot, '')) like ? or lower(coalesce(reasoning_effort, '')) like ? or lower(coalesce(service_tier, '')) like ? or lower(coalesce(executor_type, '')) like ? or lower(coalesce(fail_summary, '')) like ? or lower(coalesce(api_key_hash, '')) = ?)`)
+			args = append(args, like, like, like, like, like, like, like, like, like, like, like, hash)
 		} else {
-			conditions = append(conditions, `(lower(coalesce(model, '')) like ? or lower(coalesce(resolved_model, '')) like ? or lower(coalesce(endpoint, '')) like ? or lower(coalesce(source, '')) like ? or lower(coalesce(source_hash, '')) like ? or lower(coalesce(api_key_hash, '')) like ? or lower(coalesce(auth_project_id_snapshot, '')) like ? or lower(coalesce(reasoning_effort, '')) like ? or lower(coalesce(fail_summary, '')) like ?)`)
-			args = append(args, like, like, like, like, like, like, like, like, like)
+			conditions = append(conditions, `(lower(coalesce(model, '')) like ? or lower(coalesce(resolved_model, '')) like ? or lower(coalesce(endpoint, '')) like ? or lower(coalesce(source, '')) like ? or lower(coalesce(source_hash, '')) like ? or lower(coalesce(api_key_hash, '')) like ? or lower(coalesce(auth_project_id_snapshot, '')) like ? or lower(coalesce(reasoning_effort, '')) like ? or lower(coalesce(service_tier, '')) like ? or lower(coalesce(executor_type, '')) like ? or lower(coalesce(fail_summary, '')) like ?)`)
+			args = append(args, like, like, like, like, like, like, like, like, like, like, like)
 		}
 	} else if hash != "" {
 		conditions = append(conditions, "lower(coalesce(api_key_hash, '')) = ?")

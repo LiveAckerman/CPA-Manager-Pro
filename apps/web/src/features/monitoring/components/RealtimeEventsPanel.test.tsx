@@ -17,6 +17,7 @@ const t = ((key: string) => {
     'monitoring.column_time': 'Time',
     'monitoring.column_type': 'Type',
     'monitoring.elapsed_short': 'Elapsed',
+    'monitoring.executor_type_short': 'Executor',
     'monitoring.fail_status_code_short': 'HTTP',
     'monitoring.filter_status_failed': 'Failed only',
     'monitoring.load_more_events': 'Load more',
@@ -29,6 +30,7 @@ const t = ((key: string) => {
     'monitoring.request_status': 'Status',
     'monitoring.result_failed': 'Failed',
     'monitoring.result_success': 'Success',
+    'monitoring.service_tier_short': 'Tier',
     'monitoring.this_call_cost': 'Cost',
     'monitoring.this_call_usage': 'Usage',
     'monitoring.ttft_short': 'TTFT',
@@ -142,7 +144,9 @@ describe('RealtimeEventsPanel', () => {
       baseRow({
         failed: true,
         successRate: 0,
+        executorType: 'codex',
         reasoningEffort: 'medium',
+        serviceTier: 'priority',
         cacheReadTokens: 4,
         cacheCreationTokens: 1,
         failStatusCode: 429,
@@ -152,7 +156,9 @@ describe('RealtimeEventsPanel', () => {
 
     expect(markup).toContain('<th>Effort</th>');
     expect(markup).toContain('>TPS</th>');
+    expect(markup).toContain('Executor: codex');
     expect(markup).toContain('medium');
+    expect(markup).toContain('Tier: priority');
     expect(markup).toContain('client-gpt');
     expect(markup).toContain('gpt-5.4');
     expect(markup).not.toContain('Resolved');

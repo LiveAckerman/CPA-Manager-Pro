@@ -39,6 +39,8 @@ func ManagerConfigErrorStatus(err error) int {
 	switch {
 	case strings.Contains(message, "connection setup is managed by environment variables"):
 		return http.StatusConflict
+	case strings.Contains(message, "CPA connection is already bound"):
+		return http.StatusConflict
 	case strings.Contains(message, "cpaBaseUrl and managementKey are required"),
 		strings.Contains(message, "CPA redis-usage-queue-retention-seconds"),
 		strings.Contains(message, "pollIntervalMs must be less than or equal"),
@@ -65,6 +67,8 @@ func UsageServiceErrorCode(err error) string {
 	switch {
 	case strings.Contains(message, "connection setup is managed by environment variables"):
 		return "connection_env_managed"
+	case strings.Contains(message, "CPA connection is already bound"):
+		return "cpa_connection_already_bound"
 	case strings.Contains(message, "cpaBaseUrl and managementKey are required when request monitoring is enabled"):
 		return "cpa_connection_required_for_monitoring"
 	case strings.Contains(message, "cpaBaseUrl and managementKey are required"):

@@ -27,6 +27,7 @@ const (
 	codexUsageURL       = "https://chatgpt.com/backend-api/wham/usage"
 	codexFiveHourWindow = 18_000
 	codexWeekWindow     = 604_800
+	codexMonthWindow    = 2_592_000
 	maxStoredBodyText   = 2048
 )
 
@@ -143,6 +144,36 @@ type codexRateLimit struct {
 type codexWindow struct {
 	UsedPercent        *float64
 	LimitWindowSeconds *float64
+}
+
+type codexClassifiedWindows struct {
+	FiveHour    *codexWindow
+	Weekly      *codexWindow
+	Monthly     *codexWindow
+	GenericLong *codexWindow
+}
+
+func (w codexClassifiedWindows) longWindow() *codexWindow {
+	if w.Weekly != nil {
+		return w.Weekly
+	}
+	if w.Monthly != nil {
+		return w.Monthly
+	}
+	return w.GenericLong
+}
+
+func (w codexClassifiedWindows) longWindowLabel(window *codexWindow) string {
+	switch window {
+	case w.Weekly:
+		return "周额度"
+	case w.Monthly:
+		return "月额度"
+	case w.GenericLong:
+		return "长期额度"
+	default:
+		return "长期额度"
+	}
 }
 
 func New(st *store.Store, managerConfigService *managerconfig.Service, clients ...*http.Client) *Service {
@@ -1011,58 +1042,60 @@ func resolveWindowAwareProbeAction(item account, statusCode int, bodyText string
 	if rateLimit == nil {
 		return nil
 	}
-	_, weekly := classifyWindows(rateLimit)
-	if weekly == nil || weekly.UsedPercent == nil {
+	classified := classifyWindows(rateLimit)
+	longWindow := classified.longWindow()
+	if longWindow == nil || longWindow.UsedPercent == nil {
 		return nil
 	}
-	weeklyUsedPercent := *weekly.UsedPercent
-	fiveHour, _ := classifyWindows(rateLimit)
+	longWindowUsedPercent := *longWindow.UsedPercent
+	longWindowLabel := classified.longWindowLabel(longWindow)
+	fiveHour := classified.FiveHour
 	fiveHourOverThreshold := fiveHour != nil && fiveHour.UsedPercent != nil && *fiveHour.UsedPercent >= threshold
 
 	if statusCode == http.StatusUnauthorized {
-		decision := resolveUnauthorizedProbeAction(bodyText, ptrFloat(weeklyUsedPercent))
+		decision := resolveUnauthorizedProbeAction(bodyText, ptrFloat(longWindowUsedPercent))
 		return &decision
 	}
-	if weeklyUsedPercent >= threshold {
+	if longWindowUsedPercent >= threshold {
 		if item.Disabled {
 			return &inspectionDecision{
 				Action:       "keep",
-				ActionReason: "周额度达到阈值，但账号已禁用",
-				UsedPercent:  ptrFloat(weeklyUsedPercent),
+				ActionReason: fmt.Sprintf("%s达到阈值，但账号已禁用", longWindowLabel),
+				UsedPercent:  ptrFloat(longWindowUsedPercent),
 				IsQuota:      true,
 			}
 		}
 		return &inspectionDecision{
 			Action:       "disable",
-			ActionReason: "周额度达到阈值，建议禁用账号",
-			UsedPercent:  ptrFloat(weeklyUsedPercent),
+			ActionReason: fmt.Sprintf("%s达到阈值，建议禁用账号", longWindowLabel),
+			UsedPercent:  ptrFloat(longWindowUsedPercent),
 			IsQuota:      true,
 		}
 	}
 	if item.Disabled {
-		reason := "周额度仍可用，建议立即启用账号"
+		reason := fmt.Sprintf("%s仍可用，建议立即启用账号", longWindowLabel)
 		if fiveHourOverThreshold {
-			reason = "5 小时额度达到阈值，但周额度仍可用，建议立即启用账号"
+			reason = fmt.Sprintf("5 小时额度达到阈值，但%s仍可用，建议立即启用账号", longWindowLabel)
 		}
 		return &inspectionDecision{
 			Action:       "enable",
 			ActionReason: reason,
-			UsedPercent:  ptrFloat(weeklyUsedPercent),
+			UsedPercent:  ptrFloat(longWindowUsedPercent),
 			IsQuota:      false,
 		}
 	}
 	if fiveHourOverThreshold {
 		return &inspectionDecision{
 			Action:       "keep",
-			ActionReason: "5 小时额度达到阈值，但周额度仍可用，暂不禁用账号",
-			UsedPercent:  ptrFloat(weeklyUsedPercent),
+			ActionReason: fmt.Sprintf("5 小时额度达到阈值，但%s仍可用，暂不禁用账号", longWindowLabel),
+			UsedPercent:  ptrFloat(longWindowUsedPercent),
 			IsQuota:      false,
 		}
 	}
 	return &inspectionDecision{
 		Action:       "keep",
-		ActionReason: "周额度仍可用，无需处理",
-		UsedPercent:  ptrFloat(weeklyUsedPercent),
+		ActionReason: fmt.Sprintf("%s仍可用，无需处理", longWindowLabel),
+		UsedPercent:  ptrFloat(longWindowUsedPercent),
 		IsQuota:      false,
 	}
 }
@@ -1704,13 +1737,15 @@ func parseWindow(raw map[string]any) *codexWindow {
 	return window
 }
 
-func classifyWindows(limit *codexRateLimit) (*codexWindow, *codexWindow) {
+func classifyWindows(limit *codexRateLimit) codexClassifiedWindows {
 	if limit == nil {
-		return nil, nil
+		return codexClassifiedWindows{}
 	}
 	raw := []*codexWindow{limit.PrimaryWindow, limit.SecondaryWindow}
 	var fiveHour *codexWindow
 	var weekly *codexWindow
+	var monthly *codexWindow
+	var genericLong *codexWindow
 	for _, window := range raw {
 		if window == nil || window.LimitWindowSeconds == nil {
 			continue
@@ -1720,15 +1755,23 @@ func classifyWindows(limit *codexRateLimit) (*codexWindow, *codexWindow) {
 			fiveHour = window
 		} else if seconds == codexWeekWindow && weekly == nil {
 			weekly = window
+		} else if seconds == codexMonthWindow && monthly == nil {
+			monthly = window
+		} else if seconds > codexFiveHourWindow && genericLong == nil {
+			genericLong = window
 		}
 	}
-	if fiveHour == nil && limit.PrimaryWindow != weekly {
+	if fiveHour == nil && limit.PrimaryWindow != weekly && limit.PrimaryWindow != monthly && limit.PrimaryWindow != genericLong && !hasExplicitWindowSeconds(limit.PrimaryWindow) {
 		fiveHour = limit.PrimaryWindow
 	}
-	if weekly == nil && limit.SecondaryWindow != fiveHour {
+	if weekly == nil && limit.SecondaryWindow != fiveHour && !hasExplicitWindowSeconds(limit.SecondaryWindow) {
 		weekly = limit.SecondaryWindow
 	}
-	return fiveHour, weekly
+	return codexClassifiedWindows{FiveHour: fiveHour, Weekly: weekly, Monthly: monthly, GenericLong: genericLong}
+}
+
+func hasExplicitWindowSeconds(window *codexWindow) bool {
+	return window != nil && window.LimitWindowSeconds != nil
 }
 
 func deriveRateLimitUsedPercent(limit *codexRateLimit) *float64 {

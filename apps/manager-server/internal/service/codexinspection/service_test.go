@@ -449,6 +449,69 @@ func TestRunClassifiesInvalidatedUnauthorizedAsDelete(t *testing.T) {
 	}
 }
 
+func TestResolveProbeActionUsesMonthlyWindowAsLongQuota(t *testing.T) {
+	item := account{DisplayAccount: "user@example.test"}
+	threshold := 100.0
+
+	t.Run("keeps healthy monthly quota", func(t *testing.T) {
+		rateLimit := &codexRateLimit{
+			PrimaryWindow: &codexWindow{
+				UsedPercent:        ptrFloat(5),
+				LimitWindowSeconds: ptrFloat(codexMonthWindow),
+			},
+		}
+		decision := resolveProbeAction(item, http.StatusOK, "", rateLimit, deriveRateLimitUsedPercent(rateLimit), false, threshold)
+
+		if decision.Action != "keep" ||
+			decision.ActionReason != "月额度仍可用，无需处理" ||
+			decision.UsedPercent == nil ||
+			*decision.UsedPercent != 5 ||
+			decision.IsQuota {
+			t.Fatalf("decision = %#v, want keep healthy monthly quota", decision)
+		}
+	})
+
+	t.Run("disables exhausted monthly quota", func(t *testing.T) {
+		rateLimit := &codexRateLimit{
+			PrimaryWindow: &codexWindow{
+				UsedPercent:        ptrFloat(100),
+				LimitWindowSeconds: ptrFloat(codexMonthWindow),
+			},
+		}
+		decision := resolveProbeAction(item, http.StatusOK, "", rateLimit, deriveRateLimitUsedPercent(rateLimit), true, threshold)
+
+		if decision.Action != "disable" ||
+			decision.ActionReason != "月额度达到阈值，建议禁用账号" ||
+			decision.UsedPercent == nil ||
+			*decision.UsedPercent != 100 ||
+			!decision.IsQuota {
+			t.Fatalf("decision = %#v, want disable exhausted monthly quota", decision)
+		}
+	})
+
+	t.Run("keeps exhausted short window with healthy monthly quota", func(t *testing.T) {
+		rateLimit := &codexRateLimit{
+			PrimaryWindow: &codexWindow{
+				UsedPercent:        ptrFloat(100),
+				LimitWindowSeconds: ptrFloat(codexFiveHourWindow),
+			},
+			SecondaryWindow: &codexWindow{
+				UsedPercent:        ptrFloat(5),
+				LimitWindowSeconds: ptrFloat(codexMonthWindow),
+			},
+		}
+		decision := resolveProbeAction(item, http.StatusOK, "", rateLimit, deriveRateLimitUsedPercent(rateLimit), true, threshold)
+
+		if decision.Action != "keep" ||
+			decision.ActionReason != "5 小时额度达到阈值，但月额度仍可用，暂不禁用账号" ||
+			decision.UsedPercent == nil ||
+			*decision.UsedPercent != 5 ||
+			decision.IsQuota {
+			t.Fatalf("decision = %#v, want keep exhausted short window with healthy monthly quota", decision)
+		}
+	})
+}
+
 func TestRunFallsBackToManagementAPICallPath(t *testing.T) {
 	var legacyAPICalls int
 	var managementAPICalls int

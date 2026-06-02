@@ -114,7 +114,7 @@ CPA_MANAGER_ADMIN_KEY='replace-with-a-long-random-admin-key' ./cpa-manager-plus
    - 如果没有设置 `CPA_MANAGER_ADMIN_KEY`，保存 `CPA Manager Pro admin key generated: cmp_admin_...`。
    - 确认没有 `decrypt secret`、`open sqlite`、`bootstrap manager server` 错误。
 2. 打开面板并进入「配置面板 -> CPA Manager Pro 配置」。
-3. 检查 CPA 地址、请求监控开关、采集模式、轮询间隔。
+3. 检查已绑定 CPA 地址、请求监控开关、采集模式、轮询间隔。
 4. 打开仪表盘或监控页，确认历史数据可见。
 5. 请求 `/status`，确认 collector 状态、`lastConsumedAt`、`lastInsertedAt` 和 `lastError`。
 6. 备份迁移后的 `/data`，此时必须包含新生成的 `data.key`。
@@ -158,6 +158,6 @@ Docker 场景可以用临时 sqlite 容器或宿主机 sqlite 工具操作挂载
 ## 常见问题
 
 - 迁移后没有旧数据：通常是挂载了新的 `cpa-manager-plus-data` 空 volume，而不是旧 `cpa-manager-data`。
-- 登录一直 401：完整 Docker 方案需要 Manager Server 管理员密钥；CPA 托管面板外置模式才兼容 CPA Management Key。
+- 登录一直 401：Manager Server 接口需要管理员密钥；CPA Management Key 只用于登录 CPA 控制面板。
 - 监控为空：确认 CPA 用量发布已开启，`USAGE_COLLECTOR_MODE` 与网络路径匹配，并且同一个 CPA 实例只有一个 Manager Server 消费用量队列。
 - 解密失败：确认迁移后没有丢失或替换 `/data/data.key`。

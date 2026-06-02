@@ -56,13 +56,13 @@ func (r *repository) InsertBatch(ctx context.Context, events []model.UsageEvent)
 	}()
 
 	stmt, err := tx.PrepareContext(ctx, `insert or ignore into usage_events (
-		request_id, event_hash, timestamp_ms, timestamp, provider, model, endpoint, method, path,
+		request_id, event_hash, timestamp_ms, timestamp, provider, executor_type, model, endpoint, method, path,
 		auth_type, auth_index, source, source_hash, api_key_hash,
 		account_snapshot, auth_label_snapshot, auth_file_snapshot, auth_provider_snapshot, auth_project_id_snapshot, auth_snapshot_at_ms,
-		requested_model, resolved_model, reasoning_effort,
+		requested_model, resolved_model, reasoning_effort, service_tier,
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_tokens, cache_read_tokens, cache_creation_tokens, total_tokens,
 		latency_ms, ttft_ms, failed, fail_status_code, fail_summary, fail_body, raw_json, created_at_ms
-	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return model.InsertResult{}, err
 	}
@@ -87,6 +87,7 @@ func (r *repository) InsertBatch(ctx context.Context, events []model.UsageEvent)
 			event.TimestampMS,
 			event.Timestamp,
 			nullString(event.Provider),
+			nullString(event.ExecutorType),
 			event.Model,
 			nullString(event.Endpoint),
 			nullString(event.Method),
@@ -105,6 +106,7 @@ func (r *repository) InsertBatch(ctx context.Context, events []model.UsageEvent)
 			nullString(event.RequestedModel),
 			nullString(event.ResolvedModel),
 			nullString(event.ReasoningEffort),
+			nullString(event.ServiceTier),
 			event.InputTokens,
 			event.OutputTokens,
 			event.ReasoningTokens,
@@ -143,10 +145,10 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 		limit = 50000
 	}
 	rows, err := r.db.QueryContext(ctx, `select
-		request_id, event_hash, timestamp_ms, timestamp, provider, model, endpoint, method, path,
+		request_id, event_hash, timestamp_ms, timestamp, provider, executor_type, model, endpoint, method, path,
 		auth_type, auth_index, source, source_hash, api_key_hash,
 		account_snapshot, auth_label_snapshot, auth_file_snapshot, auth_provider_snapshot, auth_project_id_snapshot, auth_snapshot_at_ms,
-		requested_model, resolved_model, reasoning_effort,
+		requested_model, resolved_model, reasoning_effort, service_tier,
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_tokens, cache_read_tokens, cache_creation_tokens, total_tokens,
 		latency_ms, ttft_ms, failed, fail_status_code, fail_summary, created_at_ms
 		from usage_events
@@ -160,7 +162,7 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 	events := make([]model.UsageEvent, 0)
 	for rows.Next() {
 		var event model.UsageEvent
-		var requestID, provider, endpoint, method, path, authType, authIndex, source, sourceHash, apiKeyHash, accountSnapshot, authLabelSnapshot, authFileSnapshot, authProviderSnapshot, authProjectIDSnapshot, requestedModel, resolvedModel, reasoningEffort, failSummary sql.NullString
+		var requestID, provider, executorType, endpoint, method, path, authType, authIndex, source, sourceHash, apiKeyHash, accountSnapshot, authLabelSnapshot, authFileSnapshot, authProviderSnapshot, authProjectIDSnapshot, requestedModel, resolvedModel, reasoningEffort, serviceTier, failSummary sql.NullString
 		var authSnapshotAt sql.NullInt64
 		var latency, ttft sql.NullInt64
 		var failStatusCode sql.NullInt64
@@ -171,6 +173,7 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 			&event.TimestampMS,
 			&event.Timestamp,
 			&provider,
+			&executorType,
 			&event.Model,
 			&endpoint,
 			&method,
@@ -189,6 +192,7 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 			&requestedModel,
 			&resolvedModel,
 			&reasoningEffort,
+			&serviceTier,
 			&event.InputTokens,
 			&event.OutputTokens,
 			&event.ReasoningTokens,
@@ -208,6 +212,7 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 		}
 		event.RequestID = requestID.String
 		event.Provider = provider.String
+		event.ExecutorType = executorType.String
 		event.Endpoint = endpoint.String
 		event.Method = method.String
 		event.Path = path.String
@@ -224,6 +229,7 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 		event.RequestedModel = requestedModel.String
 		event.ResolvedModel = resolvedModel.String
 		event.ReasoningEffort = reasoningEffort.String
+		event.ServiceTier = serviceTier.String
 		if authSnapshotAt.Valid {
 			event.AuthSnapshotAtMS = authSnapshotAt.Int64
 		}

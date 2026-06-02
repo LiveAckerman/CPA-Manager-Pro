@@ -75,7 +75,9 @@ func TestStoreCompatMigratesLegacyUsageEventSchema(t *testing.T) {
 		"auth_file_snapshot",
 		"auth_provider_snapshot",
 		"auth_snapshot_at_ms",
+		"executor_type",
 		"reasoning_effort",
+		"service_tier",
 		"cache_read_tokens",
 		"cache_creation_tokens",
 		"ttft_ms",
@@ -120,7 +122,9 @@ func TestStoreCompatMigratesLegacyUsageEventSchema(t *testing.T) {
 			AuthFileSnapshot:     "alice.json",
 			AuthProviderSnapshot: "codex",
 			AuthSnapshotAtMS:     1_778_000_000_100,
+			ExecutorType:         "codex",
 			ReasoningEffort:      "medium",
+			ServiceTier:          "priority",
 			InputTokens:          1,
 			OutputTokens:         2,
 			CacheReadTokens:      4,
@@ -149,7 +153,8 @@ func TestStoreCompatMigratesLegacyUsageEventSchema(t *testing.T) {
 		}
 	}
 	if migrated.EventHash == "" || migrated.AccountSnapshot != "alice@example.com" ||
-		migrated.AuthProviderSnapshot != "codex" || migrated.ReasoningEffort != "medium" ||
+		migrated.AuthProviderSnapshot != "codex" || migrated.ExecutorType != "codex" ||
+		migrated.ReasoningEffort != "medium" || migrated.ServiceTier != "priority" ||
 		migrated.CacheReadTokens != 4 || migrated.CacheCreationTokens != 1 ||
 		migrated.TTFTMS == nil || *migrated.TTFTMS != 320 ||
 		migrated.FailStatusCode != 429 || migrated.FailSummary != "rate limit exceeded" ||

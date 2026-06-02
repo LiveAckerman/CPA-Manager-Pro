@@ -728,6 +728,8 @@ export interface MonitoringAnalyticsEventRow {
   auth_project_id_snapshot?: string;
   resolved_model?: string;
   reasoning_effort?: string;
+  service_tier?: string;
+  executor_type?: string;
   input_tokens: number;
   output_tokens: number;
   cached_tokens: number;

@@ -2,12 +2,16 @@ import type { TFunction } from 'i18next';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   fetchClaudeQuota,
+  fetchCodexQuota,
   fetchGeminiCliCodeAssist,
   fetchGeminiCliQuotaBuckets,
   fetchXaiQuota,
 } from '@/utils/quota';
 import type { MonitoringAccountQuotaTarget } from '@/features/monitoring/accountOverviewQuotaTargets';
-import type { MonitoringAccountRow, MonitoringApiKeyRow } from '@/features/monitoring/hooks/useMonitoringData';
+import type {
+  MonitoringAccountRow,
+  MonitoringApiKeyRow,
+} from '@/features/monitoring/hooks/useMonitoringData';
 import {
   buildAccountOptions,
   buildApiKeyOptionsFromRows,
@@ -42,6 +46,10 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'claude_quota.five_hour': '5-hour limit',
     'codex_quota.title': 'Codex Quota',
     'codex_quota.empty_windows': 'No Codex quota data',
+    'codex_quota.plan_label': 'Plan',
+    'codex_quota.plan_free': 'Free',
+    'codex_quota.monthly_window': 'Monthly limit',
+    'codex_quota.window_usage_duration': '{{used}} / {{total}} used',
     'gemini_cli_quota.title': 'Gemini CLI Quota',
     'gemini_cli_quota.tier_label': 'Tier',
     'gemini_cli_quota.credit_label': 'Google One AI Credits',
@@ -136,11 +144,9 @@ const createApiKeyRow = (apiKeyHash: string, label: string): MonitoringApiKeyRow
 
 describe('monitoringCenterPageModel filter options', () => {
   it('keeps alternate candidates when a dynamic filter already has a selected value', () => {
-    expect(buildProviderOptionsFromValues(['codex', 'gemini'], 'codex', t).map((item) => item.value)).toEqual([
-      'all',
-      'codex',
-      'gemini',
-    ]);
+    expect(
+      buildProviderOptionsFromValues(['codex', 'gemini'], 'codex', t).map((item) => item.value)
+    ).toEqual(['all', 'codex', 'gemini']);
     expect(
       buildAccountOptions(
         [createAccountRow('alice@example.com'), createAccountRow('bob@example.com')],
@@ -148,11 +154,9 @@ describe('monitoringCenterPageModel filter options', () => {
         t
       ).map((item) => item.value)
     ).toEqual(['all', 'alice@example.com', 'bob@example.com']);
-    expect(buildModelOptionsFromValues(['gpt-a', 'gpt-b'], 'gpt-a', t).map((item) => item.value)).toEqual([
-      'all',
-      'gpt-a',
-      'gpt-b',
-    ]);
+    expect(
+      buildModelOptionsFromValues(['gpt-a', 'gpt-b'], 'gpt-a', t).map((item) => item.value)
+    ).toEqual(['all', 'gpt-a', 'gpt-b']);
     expect(
       buildChannelOptionsFromValues(['Primary', 'Backup'], 'Primary', t).map((item) => item.value)
     ).toEqual(['all', 'Backup', 'Primary']);
@@ -183,6 +187,7 @@ describe('monitoringCenterPageModel filter options', () => {
 describe('monitoringCenterPageModel account quota', () => {
   beforeEach(() => {
     vi.mocked(fetchClaudeQuota).mockReset();
+    vi.mocked(fetchCodexQuota).mockReset();
     vi.mocked(fetchGeminiCliCodeAssist).mockReset();
     vi.mocked(fetchGeminiCliQuotaBuckets).mockReset();
     vi.mocked(fetchXaiQuota).mockReset();
@@ -220,6 +225,47 @@ describe('monitoringCenterPageModel account quota', () => {
           label: '5-hour limit',
           remainingPercent: 60,
           resetLabel: '05/20 12:00',
+        },
+      ],
+    });
+  });
+
+  it('maps Codex monthly quota windows into account quota entries', async () => {
+    vi.mocked(fetchCodexQuota).mockResolvedValue({
+      planType: 'free',
+      windows: [
+        {
+          id: 'monthly',
+          label: 'Monthly limit',
+          labelKey: 'codex_quota.monthly_window',
+          usedPercent: 5,
+          resetLabel: '06/30 12:00',
+          limitWindowSeconds: 2_592_000,
+        },
+      ],
+    });
+
+    const entry = await requestAccountQuota(
+      createTarget({
+        provider: 'codex',
+        authIndex: '2',
+        fileName: 'codex.json',
+      }),
+      t
+    );
+
+    expect(entry).toMatchObject({
+      provider: 'codex',
+      providerLabel: 'Codex Quota',
+      metaLabels: ['Codex Quota', 'Plan: Free'],
+      planType: 'free',
+      windows: [
+        {
+          id: 'monthly',
+          label: 'Monthly limit',
+          remainingPercent: 95,
+          resetLabel: '06/30 12:00',
+          usageLabel: '1.5d / 30d used',
         },
       ],
     });

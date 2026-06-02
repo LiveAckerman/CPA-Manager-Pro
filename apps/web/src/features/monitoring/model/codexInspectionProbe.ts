@@ -176,31 +176,34 @@ const resolveWindowAwareProbeAction = (
 ): CodexInspectionDecision | null => {
   if (!rateLimit) return null;
 
-  const { fiveHourWindow, weeklyWindow } = classifyCodexRateLimitWindows(rateLimit);
-  const weeklyUsedPercent = getCodexQuotaWindowUsedPercent(weeklyWindow);
-  if (!weeklyWindow || weeklyUsedPercent === null) return null;
+  const { fiveHourWindow, weeklyWindow, monthlyWindow, longWindow } =
+    classifyCodexRateLimitWindows(rateLimit);
+  const longWindowUsedPercent = getCodexQuotaWindowUsedPercent(longWindow);
+  if (!longWindow || longWindowUsedPercent === null) return null;
 
   const fiveHourUsedPercent = getCodexQuotaWindowUsedPercent(fiveHourWindow);
-  const weeklyOverThreshold = weeklyUsedPercent >= threshold;
+  const longWindowLabel =
+    longWindow === weeklyWindow ? '周额度' : longWindow === monthlyWindow ? '月额度' : '长期额度';
+  const longWindowOverThreshold = longWindowUsedPercent >= threshold;
   const fiveHourOverThreshold = fiveHourUsedPercent !== null && fiveHourUsedPercent >= threshold;
 
   if (statusCode === 401) {
-    return resolveUnauthorizedProbeAction(bodyText, weeklyUsedPercent);
+    return resolveUnauthorizedProbeAction(bodyText, longWindowUsedPercent);
   }
 
-  if (weeklyOverThreshold) {
+  if (longWindowOverThreshold) {
     if (account.disabled) {
       return {
         action: 'keep',
-        actionReason: '周额度达到阈值，但账号已禁用',
-        usedPercent: weeklyUsedPercent,
+        actionReason: `${longWindowLabel}达到阈值，但账号已禁用`,
+        usedPercent: longWindowUsedPercent,
         isQuota: true,
       };
     }
     return {
       action: 'disable',
-      actionReason: '周额度达到阈值，建议禁用账号',
-      usedPercent: weeklyUsedPercent,
+      actionReason: `${longWindowLabel}达到阈值，建议禁用账号`,
+      usedPercent: longWindowUsedPercent,
       isQuota: true,
     };
   }
@@ -209,9 +212,9 @@ const resolveWindowAwareProbeAction = (
     return {
       action: 'enable',
       actionReason: fiveHourOverThreshold
-        ? '5 小时额度达到阈值，但周额度仍可用，建议立即启用账号'
-        : '周额度仍可用，建议立即启用账号',
-      usedPercent: weeklyUsedPercent,
+        ? `5 小时额度达到阈值，但${longWindowLabel}仍可用，建议立即启用账号`
+        : `${longWindowLabel}仍可用，建议立即启用账号`,
+      usedPercent: longWindowUsedPercent,
       isQuota: false,
     };
   }
@@ -219,16 +222,16 @@ const resolveWindowAwareProbeAction = (
   if (fiveHourOverThreshold) {
     return {
       action: 'keep',
-      actionReason: '5 小时额度达到阈值，但周额度仍可用，暂不禁用账号',
-      usedPercent: weeklyUsedPercent,
+      actionReason: `5 小时额度达到阈值，但${longWindowLabel}仍可用，暂不禁用账号`,
+      usedPercent: longWindowUsedPercent,
       isQuota: false,
     };
   }
 
   return {
     action: 'keep',
-    actionReason: '周额度仍可用，无需处理',
-    usedPercent: weeklyUsedPercent,
+    actionReason: `${longWindowLabel}仍可用，无需处理`,
+    usedPercent: longWindowUsedPercent,
     isQuota: false,
   };
 };

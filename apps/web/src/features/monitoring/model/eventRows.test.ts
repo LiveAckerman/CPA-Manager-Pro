@@ -61,4 +61,18 @@ describe('buildEventRows', () => {
     expect(noLatency.tokensPerSecond).toBeNull();
     expect(zeroLatency.tokensPerSecond).toBeNull();
   });
+
+  it('keeps CPA executor and service tier metadata searchable', () => {
+    const [row] = buildRows({
+      executor_type: 'codex',
+      service_tier: 'priority',
+      reasoning_effort: 'medium',
+    });
+
+    expect(row.executorType).toBe('codex');
+    expect(row.serviceTier).toBe('priority');
+    expect(row.searchText).toContain('codex');
+    expect(row.searchText).toContain('priority');
+    expect(row.searchText).toContain('medium');
+  });
 });

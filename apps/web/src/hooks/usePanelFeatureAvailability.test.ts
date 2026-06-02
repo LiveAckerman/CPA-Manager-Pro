@@ -3,11 +3,10 @@ import { create, type ReactTestRenderer } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import type { ManagerConfig } from '@/services/api/usageService';
 import { usageServiceApi } from '@/services/api/usageService';
-import { useAuthStore, useUsageServiceStore } from '@/stores';
+import { useAuthStore } from '@/stores';
 import {
   buildPanelManagerServiceCandidates,
   managerConfigMatchesPanel,
-  managerConfigTargetsDifferentCPA,
   resolvePanelFeatureAvailability,
   usePanelFeatureAvailability,
 } from './usePanelFeatureAvailability';
@@ -55,66 +54,42 @@ describe('panel feature availability', () => {
       buildPanelManagerServiceCandidates({
         panelHostedByUsageService: true,
         panelBase: 'http://manager.local:18317',
-        apiBase: 'http://cpa.local:8317',
-        usageServiceEnabled: true,
-        usageServiceBase: 'http://old-manager.local:18317',
       })
     ).toEqual(['http://manager.local:18317']);
   });
 
-  it('requires external Manager Server config to match the current CPA panel', () => {
+  it('does not build Manager Server candidates for CPA-hosted panels', () => {
     expect(
-      managerConfigMatchesPanel({
+      buildPanelManagerServiceCandidates({
         panelHostedByUsageService: false,
-        apiBase: 'http://cpa.local:8317',
-        config: buildManagerConfig(),
+        panelBase: 'http://cpa.local:8317',
       })
-    ).toBe(true);
-
-    expect(
-      managerConfigMatchesPanel({
-        panelHostedByUsageService: false,
-        apiBase: 'http://other-cpa.local:8317',
-        config: buildManagerConfig(),
-      })
-    ).toBe(false);
-
-    expect(
-      managerConfigMatchesPanel({
-        panelHostedByUsageService: false,
-        apiBase: 'http://cpa.local:8317',
-        config: buildManagerConfig({
-          externalUsageService: { enabled: false, serviceBase: '' },
-        }),
-      })
-    ).toBe(false);
+    ).toEqual([]);
   });
 
-  it('only marks an external Manager Server as mismatched when it is bound to another CPA', () => {
+  it('only accepts Manager config for same-origin Manager Server panels', () => {
     expect(
-      managerConfigTargetsDifferentCPA({
-        panelHostedByUsageService: false,
-        apiBase: 'http://other-cpa.local:8317',
+      managerConfigMatchesPanel({
+        panelHostedByUsageService: true,
+        apiBase: 'http://manager.local:18317',
         config: buildManagerConfig(),
       })
     ).toBe(true);
 
     expect(
-      managerConfigTargetsDifferentCPA({
+      managerConfigMatchesPanel({
         panelHostedByUsageService: false,
-        apiBase: 'http://cpa.local:8317',
-        config: buildManagerConfig({
-          externalUsageService: { enabled: false, serviceBase: '' },
-        }),
+        apiBase: 'http://other-cpa.local:8317',
+        config: buildManagerConfig(),
       })
     ).toBe(false);
 
     expect(
-      managerConfigTargetsDifferentCPA({
+      managerConfigMatchesPanel({
         panelHostedByUsageService: false,
         apiBase: 'http://cpa.local:8317',
         config: buildManagerConfig({
-          cpaConnection: { cpaBaseUrl: '', managementKey: '' },
+          externalUsageService: { enabled: false, serviceBase: '' },
         }),
       })
     ).toBe(false);
@@ -122,8 +97,8 @@ describe('panel feature availability', () => {
 
   it('marks Manager-only features available while separately gating request monitoring', () => {
     const availability = resolvePanelFeatureAvailability({
-      panelHostedByUsageService: false,
-      panelBase: 'http://cpa.local:8317',
+      panelHostedByUsageService: true,
+      panelBase: 'http://manager.local:18317',
       managerServiceBase: 'http://manager.local:18317',
       managerConfig: buildManagerConfig({
         collector: {
@@ -140,6 +115,24 @@ describe('panel feature availability', () => {
     expect(availability.serverCodexInspectionAvailable).toBe(true);
     expect(availability.requestMonitoringAvailable).toBe(false);
     expect(availability.reason).toBe('monitoring_disabled');
+  });
+
+  it('keeps Manager-only features unavailable for CPA-hosted panels even with stale Manager config', () => {
+    const availability = resolvePanelFeatureAvailability({
+      panelHostedByUsageService: false,
+      panelBase: 'http://cpa.local:8317',
+      managerServiceBase: 'http://manager.local:18317',
+      managerConfig: buildManagerConfig(),
+      hasManagerCandidate: true,
+      managementKey: 'management-key',
+    });
+
+    expect(availability.managerServiceAvailable).toBe(false);
+    expect(availability.modelPricesAvailable).toBe(false);
+    expect(availability.serverCodexInspectionAvailable).toBe(false);
+    expect(availability.requestMonitoringAvailable).toBe(false);
+    expect(availability.externalManagerConfigAvailable).toBe(false);
+    expect(availability.reason).toBe('service_not_configured');
   });
 
   it('shares one feature detection request across concurrent hook consumers', async () => {
@@ -168,13 +161,6 @@ describe('panel feature availability', () => {
         apiBase: 'http://cpa.local:8317',
         managementKey: 'management-key',
       });
-      useUsageServiceStore.setState({
-        enabled: true,
-        serviceBase: 'http://manager.local:18317',
-        panelBase: 'http://panel.local:5174',
-        panelHostMode: 'external_panel',
-        revision: 1001,
-      });
 
       function HookConsumer() {
         usePanelFeatureAvailability();
@@ -192,14 +178,9 @@ describe('panel feature availability', () => {
         );
       });
 
-      expect(getInfoSpy).toHaveBeenCalledTimes(2);
+      expect(getInfoSpy).toHaveBeenCalledTimes(1);
       expect(getInfoSpy).toHaveBeenNthCalledWith(1, 'http://panel.local:5174');
-      expect(getInfoSpy).toHaveBeenNthCalledWith(2, 'http://manager.local:18317');
-      expect(getManagerConfigSpy).toHaveBeenCalledTimes(1);
-      expect(getManagerConfigSpy).toHaveBeenCalledWith(
-        'http://manager.local:18317',
-        'management-key'
-      );
+      expect(getManagerConfigSpy).not.toHaveBeenCalled();
     } finally {
       act(() => {
         renderer?.unmount();

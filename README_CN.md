@@ -18,7 +18,7 @@ CPA 自 v6.10.0 起不再内置用量统计。当前方案通过常驻 Manager S
 CPA Manager Pro 是 CPA-Manager 的推荐后续版本。它把 CPA 管理面板与可 Docker 部署的 Manager Server 组合在一起，提供管理员密钥保护的完整面板模式、加密保存 CPA Management Key、服务端统计分析、模型价格、API Key 别名、仪表盘卡片和 Codex 账号巡检。
 
 - **CPA 主项目**: https://github.com/router-for-me/CLIProxyAPI
-- **推荐 CPA 版本**: >= v7.1.18
+- **推荐 CPA 版本**: >= v7.1.39
 - **HTTP 用量队列最低 CPA 版本**: >= v6.10.8
 
 ## 面板预览
@@ -35,18 +35,32 @@ CPA Manager Pro 是 CPA-Manager 的推荐后续版本。它把 CPA 管理面板�
 - Windows/macOS/Linux 原生 `amd64` 和 `arm64` 运行包，内置管理面板
 - 两种部署模式：
   - **完整 Docker 方案**：访问 Manager Server 内置面板，首次启动在日志中输出管理员密钥；首次 setup 使用管理员密钥保存 CPA 连接，之后登录使用管理员密钥管理整个面板
-  - **CPA 控制面板方案**：继续使用 CPA 的 `/management.html`，然后在面板中配置单独部署的 Manager Server 地址
-- 运行时监控、账号/模型/渠道拆解、模型价格、Token 费用估算、导入导出、认证文件管理、配额视图、日志、配置编辑和系统工具
+  - **CPA 控制面板方案**：继续使用 CPA 的 `/management.html` 作为纯 CPA 面板，不配置也不访问单独的 Manager Server
+- 完整 Docker 方案提供运行时监控、账号/模型/渠道拆解、模型价格、Token 费用估算、导入导出、API Key 别名、服务端 Codex 巡检和 Manager Server 系统工具
+- 两种模式都保留普通 CPA 管理能力和本地 Codex 账号巡检
 
 ## 选择部署模式
 
 | 模式 | 入口地址 | 用户需要配置 | 适用场景 |
 |---|---|---|---|
 | 完整 Docker 方案 | `http://<host>:18317/management.html` | 首次启动日志获取管理员密钥；首次 setup：管理员密钥 + CPA 地址 + CPA Management Key；之后登录：管理员密钥 | 新部署、单入口、最少浏览器/CORS 问题 |
-| CPA 控制面板方案 | `http://<cpa-host>:8317/management.html` | 先用 CPA Management Key 登录 CPA，再在「配置面板 -> CPA Manager Pro 配置」配置 Manager Server 地址 | 保留 CPA 自动载入面板的现有习惯 |
-| 前端开发方案 | Vite dev server 或 `apps/web/dist/index.html` | CPA 地址，可选 Manager Server 地址 | 本地开发 |
+| CPA 控制面板方案 | `http://<cpa-host>:8317/management.html` | 使用 CPA Management Key 登录 CPA | 保留 CPA 自动载入面板，但不需要 Manager Server 统计能力 |
+| 前端开发方案 | Vite dev server 或 `apps/web/dist/index.html` | CPA 地址 | 本地开发 |
 
 完整 Docker 方案不内置 CPA 本体。CPA 仍然作为上游服务独立运行；Docker 镜像提供 Manager Server 和内置管理面板。
+
+### 两种模式的功能边界
+
+| 能力 | 完整 Docker 方案 | CPA 控制面板方案 |
+|---|---:|---:|
+| CPA 配置、提供商/账号/Key 管理、认证文件、日志、配额视图和 CPA Management API 功能 | 支持 | 支持 |
+| 浏览器本地 Codex 账号巡检 | 支持 | 支持 |
+| Manager Server 初始化、管理员密钥登录、服务端加密保存 CPA Management Key | 支持 | 不支持 |
+| 请求监控、首页用量统计、模型价格、API Key 别名、用量导入导出 | 支持 | 不支持 |
+| 服务端 Codex 巡检、定时任务、持久化巡检历史 | 支持 | 不支持 |
+| Manager Server `/status`、`/usage-service/config`、`/v0/management/usage`、模型价格、别名、导入导出接口 | 仅管理员密钥 | 不使用 |
+
+一个 Manager Server 在初始化时只绑定一个 CPA。常规配置页可以调整该 CPA 的采集器设置，也可以更新已绑定 CPA 的 CPA Management Key，但不能切换到另一个 CPA 地址。需要绑定其他 CPA 时，请明确重置或迁移 Manager Server 数据/配置。
 
 ## CPA 前置条件
 
@@ -55,7 +69,8 @@ CPA Manager Pro 是 CPA-Manager 的推荐后续版本。它把 CPA 管理面板�
 - CPA 必须启用 Management，因为用量队列与 `/v0/management` 使用相同的可用性条件和 Management Key。
 - 使用请求监控时，CPA 必须启用用量发布：配置 `usage-statistics-enabled: true`，或通过 `PUT /usage-statistics-enabled` 提交 `{ "value": true }`。CPA Manager Pro 初始化或保存启用请求监控时会自动打开该开关。
 - 关闭 CPAM 请求监控只会停止 Manager Server 采集器，不会自动关闭 CPA 用量发布或清空 CPA 用量队列。如果 CPA 用量发布仍开启，在队列保留时间内再次启用请求监控，可能会采集到关闭采集器期间保留的数据。
-- 推荐使用 CPA `v7.1.18+` 以匹配当前面板能力，并获取新版监控视图所需的完整 Redis usage 元数据：请求侧 `reasoning_effort`、`tokens.cache_read_tokens`、`tokens.cache_creation_tokens`、`fail.status_code` 和 `fail.body`。CPA `v6.10.8+` 已提供 HTTP 用量队列接口 `/v0/management/usage-queue`，可通过普通 HTTP 反代访问。旧版兼容 CPA 不会输出这些可选字段；CPA Manager Plus 仍会兼容导入和采集旧事件，缺失的字符串字段显示为空/未知，缺失的数值字段按 `0` 处理。
+- 推荐使用 CPA `v7.1.39+` 以匹配当前面板能力，并获取新版监控视图所需的完整 Redis usage 元数据：请求侧 `reasoning_effort`、`service_tier`、`executor_type`、`tokens.cache_read_tokens`、`tokens.cache_creation_tokens`、`fail.status_code` 和 `fail.body`。CPA `v6.10.8+` 已提供 HTTP 用量队列接口 `/v0/management/usage-queue`，可通过普通 HTTP 反代访问。旧版兼容 CPA 不会输出这些可选字段；CPA Manager Pro 仍会兼容导入和采集旧事件，缺失的字符串字段显示为空/未知，缺失的数值字段按 `0` 处理。
+- CPA `v7.1.39+` 的 RESP Pub/Sub 会发送 `{"support_refresh":true}`、`{"refresh":true}` 这类 usage 控制消息。当前 CPA Manager Pro 会过滤这些控制消息，不会把它们写成空请求行；收到 refresh 时还会清理认证快照缓存，以便 CPA 认证/配置变化后重新读取账号元数据。
 - `reasoning_effort` 是请求侧推理强度配置，不是实际推理 token 消耗；实际消耗仍以 `tokens.reasoning_tokens` 为准。
 - Manager Server 的 `auto` 模式会先尝试 RESP Pub/Sub（`subscribe`），再尝试 HTTP 用量队列，最后回退到旧版 RESP 弹出模式。RESP 传输监听在 CPA API 端口，通常是 `8317`，不能通过普通 HTTP 反代转发。
 - CPA 在内存中保留队列项的时间由 `redis-usage-queue-retention-seconds` 控制，默认 `60` 秒，最大 `3600` 秒。Manager Server 应保持常驻运行。
@@ -86,14 +101,10 @@ Manager Server 配置完成后，新浏览器再次打开同一地址会使用�
 浏览器
   -> CPA /management.html
       -> 普通 CPA Management API 请求仍然访问 CPA
-      -> usage 相关请求访问已配置的 Manager Server
-
-Manager Server
-  -> HTTP/RESP/PubSub 消费器 -> CPA API 端口
-  -> SQLite /data/usage.sqlite
+      -> 本地 Codex 巡检在浏览器内执行
 ```
 
-当你希望保留 CPA 自动下载并托管面板的机制时，使用这个方案。该模式由 CPA 托管页面，因此不会显示完整 Docker 初始化页，也不要求用户在 CPA 面板里输入 Manager Server 管理员密钥。请求监控是可选能力；如果没有部署 Manager Server，面板会自动隐藏请求监控入口，直接访问监控页时会提示先部署并配置 Manager Server。需要请求监控时，先用 CPA Management Key 登录 CPA，再单独部署 Manager Server，然后在面板的「配置面板 -> CPA Manager Pro 配置」中启用并填写地址。该方案做的是完整 Docker 方案的减法：不托管主入口、不提供初始化页、不接管 CPA 普通管理接口。
+当你希望保留 CPA 自动下载并托管面板的机制时，使用这个方案。该模式由 CPA 托管页面，并与 Manager Server 完全隔离：不显示完整 Docker 初始化页，不要求输入 Manager Server 管理员密钥，不保存 Manager Server 地址，也不开放依赖 Manager Server SQLite 或 CPA 用量统计的功能。监控中心、首页用量统计、模型价格、API Key 别名、用量导入导出、采集器状态和服务端 Codex 巡检都会隐藏或不可用。本地 Codex 账号巡检仍可使用，因为它在浏览器内针对 CPA 可访问的认证文件执行。
 
 ### Manager Server 后端
 
@@ -238,32 +249,29 @@ docker run -d \
 
    使用 CPA Management Key 登录 CPA。这个入口由 CPA 托管，不使用完整 Docker 初始化页。
 
-2. 单独部署 Manager Server：
-
-   ```bash
-   docker run -d \
-     --name cpa-manager-plus \
-     --restart unless-stopped \
-     -p 18317:18317 \
-     -v cpa-manager-plus-data:/data \
-     seakee/cpa-manager-plus:latest
-   ```
-
-3. 在 CPA 面板进入：
+2. 要让 CPA 将本项目作为默认面板，在 CPA 面板进入：
 
    ```text
-   配置面板 -> CPA Manager Pro 配置
+   配置面板 -> 远程访问和控制面板设置
    ```
 
-4. 启用并填写：
+   将「面板仓库」（`remote-management.panel-repo`）设置为：
 
    ```text
-   http://<manager-server-host>:18317
+   https://github.com/seakee/CPA-Manager-Plus
    ```
 
-5. 保存 CPA Manager Pro 配置。
+   保持「禁用控制面板」关闭。如果开启了「禁用面板自动更新」，CPA 只会在缓存文件 `static/management.html` 不存在时重新下载面板。
 
-面板会把当前 CPA 地址和 CPA Management Key 发送给 Manager Server。之后监控页从 Manager Server 读取用量数据，其他管理功能仍然访问 CPA。该外置模式下，Manager Server 接口兼容 CPA Management Key；完整 Docker 模式仍使用管理员密钥。
+3. 保存 CPA 配置并重新打开：
+
+   ```text
+   http://<cpa-host>:8317/management.html
+   ```
+
+4. 正常使用 CPA 面板。
+
+该模式刻意限制在 CPA 支持的功能范围内，不配置 Manager Server，不把当前 CPA 地址或 CPA Management Key 发送给 Manager Server，也不读取 Manager Server SQLite 数据。需要请求监控、历史用量统计、模型价格、API Key 别名、用量导入导出或服务端 Codex 巡检时，请使用完整 Docker 方案。
 
 ## 本地从源码构建
 
@@ -275,7 +283,7 @@ docker compose -f docker-compose.manager.yml up --build
 
 ## Manager Server 配置项
 
-大多数用户可以直接在面板的「配置面板 -> CPA Manager Pro 配置」中配置 CPA 地址、CPA Management Key、是否启用请求监控、采集模式和轮询间隔。CPA Manager Pro 配置会保存到 SQLite；环境变量更适合首次引导和无人值守部署。
+CPA 地址和 CPA Management Key 在首次 setup 时绑定，或通过环境变量用于无人值守启动。之后「配置面板 -> CPA Manager Pro 配置」只管理已绑定 CPA 的请求监控开关、采集模式、轮询间隔和 CPA Management Key 轮换，不用于切换 CPA 地址。CPA Manager Pro 配置会保存到 SQLite。
 
 下表是 Manager Server 运行时配置。前端构建时配置是独立的：`VITE_DEFAULT_CPA_BASE_URL` 用于设置 Manager Server 托管面板首次初始化页中展示的默认 CPA 地址；未设置时，Docker 托管面板默认建议 `http://host.docker.internal:8317`。
 
@@ -317,7 +325,7 @@ docker compose -f docker-compose.manager.yml up --build
 ### CPA 与 CPA Manager Pro 配置边界
 
 - **CPA 配置**：`usage-statistics-enabled`、`redis-usage-queue-retention-seconds`、代理、日志、路由、认证文件等仍属于 CPA，由 `/config` / `/config.yaml` 管理。
-- **CPA Manager Pro 配置**：CPA 连接地址、CPA Management Key、请求监控开关、Manager Server 采集模式、`pollIntervalMs`、`batchSize`、`queryLimit`、CPA 控制面板模式下的 Manager Server 引导地址等保存到 Manager Server SQLite。
+- **CPA Manager Pro 配置**：完整 Docker 方案下，setup 绑定的 CPA 连接地址、加密后的 CPA Management Key、请求监控开关、Manager Server 采集模式、`pollIntervalMs`、`batchSize`、`queryLimit` 等保存到 Manager Server SQLite。同一个 CPA 的密钥可以轮换；切换 CPA 地址需要重置初始化。
 - 配置面板会分开展示 CPA 与 CPA Manager Pro 配置。保存 CPAM 配置不会写入 CPA `config.yaml`；启用请求监控时会按要求调用 CPA Management API 启用用量统计，关闭请求监控时只停止 CPAM 采集器。
 
 ### 迁移指引
@@ -330,7 +338,7 @@ docker compose -f docker-compose.manager.yml up --build
 4. 完整 Docker 方案的登录凭证会变成 Manager Server 管理员密钥，不再是 CPA Management Key。建议发布/迁移时显式设置 `CPA_MANAGER_ADMIN_KEY` 或 `CPA_MANAGER_ADMIN_KEY_FILE`，否则务必保存首次启动日志里的 `cmp_admin_...`。
 5. 如果旧版本已经通过 `/setup` 保存过 CPA 地址和 CPA Management Key，服务会从 `settings.setup` 自动生成新的 `settings.manager_config_v1`，并在启动迁移时把旧明文 CPA Management Key 改写为加密存储。
 6. 如果使用环境变量 `CPA_UPSTREAM_URL` / `CPA_MANAGEMENT_KEY`，连接配置仍由环境变量管理；要改为面板持久化，请移除环境变量后重启，再在面板保存。
-7. CPA 托管面板模式下，浏览器仍需要先知道 Manager Server 地址才能读取其数据库配置；首次填写后会同步写入 SQLite，并继续保留本地缓存作为 bootstrap。
+7. 旧版 CPA 托管面板外接 Manager Server 的集成方式不再支持。需要查看历史用量、模型价格、别名、导入导出或服务端巡检历史时，请打开 Manager Server 托管的面板；CPA 控制面板方案保持为纯 CPA 面板。
 
 ## 数据与安全说明
 
@@ -365,7 +373,7 @@ docker compose -f docker-compose.manager.yml up --build
 | `GET /models`、`GET /v1/models` | setup 后将模型列表请求反代到 CPA |
 | `/v0/management/*` | 除 usage 外反代到 CPA |
 
-完整 Docker setup 后，`/status`、用量、模型价格和 `/v0/management/*` 反代接口需要使用管理员密钥作为 Bearer token。CPA 控制面板外置模式下，这些 Manager Server 接口兼容 CPA Management Key，以保持 CPA 面板方案不需要额外登录 Manager Server。
+完整 Docker setup 后，`/status`、用量、模型价格和 `/v0/management/*` 反代接口需要使用管理员密钥作为 Bearer token。CPA Management Key 不再用于访问 Manager Server-only 接口；它只保存在服务端，供 Manager Server 访问已绑定的 CPA 上游。
 
 用量导入支持两类文件：Manager Server 导出的 JSONL/NDJSON 事件文件，以及旧版 CPA `/usage/export` 生成的 JSON 快照。旧版 JSON 只有在 `usage.apis.*.models.*.details[]` 明细存在时才能转换为事件；如果文件只包含聚合总量，Manager Server 会拒绝导入，因为无法还原请求级明细。旧版导入属于迁移/恢复能力，不是与 Manager Server 新采集数据完全等价的历史延续：旧文件可能缺少 `api_key_hash`、渠道、请求 ID、method/path、延迟、缓存 token 或失败原因等元数据，账号匹配、API Key 维度分析和明细精度可能低于新采集数据。导入旧文件会影响总量、趋势图和账号/Key 拆解，准确性敏感时建议先导入测试库或备份库验证。
 
@@ -374,7 +382,7 @@ CPA usage 事件中的失败正文按敏感诊断信息处理。Manager Server �
 ## 功能概览
 
 - **仪表盘**：连接状态、后端版本、快速健康概览
-- **配置管理**：可视化和源码模式编辑 CPA 配置，并单独管理 CPA Manager Pro 配置
+- **配置管理**：可视化和源码模式编辑 CPA 配置，包括 Codex `identity-confuse`，并单独管理 CPA Manager Pro 配置
 - **AI 提供商**：Gemini、Codex、Claude、Vertex、OpenAI 兼容渠道、Ampcode
 - **认证文件**：上传、下载、删除、状态、OAuth 排除模型、模型别名
 - **配额管理**：支持提供商的配额视图
@@ -425,10 +433,15 @@ go run ./cmd/cpa-manager-plus
 - **完整 Docker 方案打开的是登录表单而不是 setup**：Manager Server 已经配置过。输入管理员密钥即可，CPA 地址来自服务端配置。
 - **首次 setup 默认 CPA 地址不符合环境**：使用 `VITE_DEFAULT_CPA_BASE_URL=<your-cpa-url>` 重新构建面板，或手动填写正确的 CPA 地址。
 - **监控页为空**：确认 CPA 已启用用量发布，检查 Manager Server `/status`，并确认只有一个消费者。
+- **升级 CPA 后实时监控出现空的 `-` 请求行**：升级 CPA Manager Pro。CPA `v7.1.39+` 会发送 Pub/Sub 控制消息，旧版 CPAM 可能把它们写成空用量事件。
 - **`unsupported RESP prefix 'H'`**：升级 CPA 到 `v6.10.8+`，或在普通 HTTP 反代场景使用 `USAGE_COLLECTOR_MODE=http`。RESP Pub/Sub/RESP 弹出模式要求 CPA 地址必须是容器/主机内能直连 `8317` 的地址，不能是普通 HTTP 反代域名。
-- **Manager Server 返回 401**：完整 Docker 方案使用管理员密钥；CPA 控制面板外置模式使用 CPA Management Key。
+- **CPA 面板仍显示旧面板**：确认 CPA 的「面板仓库」是 `https://github.com/seakee/CPA-Manager-Plus`。如果新面板仍未生效，在 CPA 容器或运行目录中删除缓存面板文件，然后刷新或重启 CPA：
+  ```bash
+  rm static/management.html
+  ```
+- **Manager Server 返回 401**：Manager Server 接口使用管理员密钥。CPA Management Key 只用于登录 CPA，不用于 Manager Server-only API。
 - **Docker 面板数据不更新**：检查 `/status` 中的 `lastConsumedAt`、`lastInsertedAt`、`lastError`。
-- **CPA 控制面板方案有 CORS 错误**：将 `USAGE_CORS_ORIGINS` 设置为 CPA 面板来源；私有部署可保持默认 `*`。
+- **CPA 控制面板方案没有监控/价格/导入导出**：这是预期行为，这些是完整 Docker / Manager Server 托管面板功能。
 - **容器重建后数据丢失**：确认 `/data` 已挂载到 Docker volume 或宿主机目录。
 - **从 CPA-Manager 迁移后看不到旧数据**：确认 Plus 容器挂载的是旧 `/data` volume，而不是新建的 `cpa-manager-plus-data` 空 volume。
 - **管理员密钥丢失**：已有 `settings.admin_credential_v1` 时，单独设置 `CPA_MANAGER_ADMIN_KEY` 不会覆盖旧凭证。按迁移指南的离线恢复步骤处理，并先备份 `/data`。

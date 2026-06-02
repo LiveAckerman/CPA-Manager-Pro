@@ -44,11 +44,7 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !ok {
-			authErr := errors.New("invalid admin key")
-			if req.Config.ExternalUsageService.Enabled {
-				authErr = errors.New("invalid management key")
-			}
-			response.Error(w, http.StatusUnauthorized, authErr)
+			response.Error(w, http.StatusUnauthorized, errors.New("invalid admin key"))
 			return
 		}
 		result, err := h.App.ManagerConfigService.Update(r.Context(), req.Config)
@@ -78,15 +74,6 @@ func (h *Handler) authorizeRead(w http.ResponseWriter, r *http.Request) bool {
 	}
 	if !setupOK || setup.ManagementKey == "" {
 		return true
-	}
-	external, err := h.App.AdminAuthService.PanelUsesExternalManagementKey(r.Context())
-	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err)
-		return false
-	}
-	if external {
-		response.Error(w, http.StatusUnauthorized, errors.New("invalid management key"))
-		return false
 	}
 	response.Error(w, http.StatusUnauthorized, errors.New("invalid admin key"))
 	return false

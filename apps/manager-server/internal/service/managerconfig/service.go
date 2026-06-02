@@ -76,6 +76,9 @@ func (s *Service) Update(ctx context.Context, submitted store.ManagerConfig) (Re
 	if source == SourceEnv && ManagerConfigConnectionDiffers(current, next) {
 		return Response{}, errors.New("connection setup is managed by environment variables")
 	}
+	if source == SourceDB && ManagerConfigCPABindingDiffers(current, next) {
+		return Response{}, errors.New("CPA connection is already bound; reset Manager Server setup before rebinding")
+	}
 	if next.CPAConnection.CPABaseURL != "" || next.CPAConnection.ManagementKey != "" {
 		if next.CPAConnection.CPABaseURL == "" || next.CPAConnection.ManagementKey == "" {
 			return Response{}, errors.New("cpaBaseUrl and managementKey are required")
@@ -244,11 +247,8 @@ func (s *Service) MergeSubmittedManagerConfig(base store.ManagerConfig, submitte
 
 	next.CodexInspection = store.NormalizeCodexInspectionConfig(submitted.CodexInspection, next.CodexInspection)
 
-	next.ExternalUsageService.Enabled = submitted.ExternalUsageService.Enabled
-	next.ExternalUsageService.ServiceBase = cpa.NormalizeBaseURL(submitted.ExternalUsageService.ServiceBase)
-	if !next.ExternalUsageService.Enabled {
-		next.ExternalUsageService.ServiceBase = ""
-	}
+	next.ExternalUsageService.Enabled = false
+	next.ExternalUsageService.ServiceBase = ""
 
 	return next
 }
@@ -272,6 +272,15 @@ func ManagerConfigConnectionDiffers(left store.ManagerConfig, right store.Manage
 		left.Collector.BatchSize != right.Collector.BatchSize ||
 		left.Collector.PollIntervalMS != right.Collector.PollIntervalMS ||
 		left.Collector.TLSSkipVerify != right.Collector.TLSSkipVerify
+}
+
+func ManagerConfigCPABindingDiffers(left store.ManagerConfig, right store.ManagerConfig) bool {
+	leftBase := cpa.NormalizeBaseURL(left.CPAConnection.CPABaseURL)
+	rightBase := cpa.NormalizeBaseURL(right.CPAConnection.CPABaseURL)
+	if leftBase == "" || left.CPAConnection.ManagementKey == "" {
+		return false
+	}
+	return leftBase != rightBase
 }
 
 func PositiveOrDefault(value int, fallback int, hardDefault int) int {

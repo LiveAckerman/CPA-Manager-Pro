@@ -49,6 +49,10 @@ export interface UsageDetail {
   authSnapshotAtMs?: number;
   reasoning_effort?: string;
   reasoningEffort?: string;
+  service_tier?: string;
+  serviceTier?: string;
+  executor_type?: string;
+  executorType?: string;
   latency_ms?: number;
   ttft_ms?: number;
   tokens: UsageTokens;
@@ -398,6 +402,8 @@ export function collectUsageDetails(usageData: unknown): UsageDetail[] {
           reasoning_effort: readDetailString(
             detailRaw.reasoning_effort ?? detailRaw.reasoningEffort
           ),
+          service_tier: readDetailString(detailRaw.service_tier ?? detailRaw.serviceTier),
+          executor_type: readDetailString(detailRaw.executor_type ?? detailRaw.executorType),
           latency_ms: latencyMs ?? undefined,
           ttft_ms: ttftMs ?? undefined,
           tokens: readTokens(detailRaw),
@@ -485,6 +491,8 @@ export function collectUsageDetailsWithEndpoint(usageData: unknown): UsageDetail
           reasoning_effort: readDetailString(
             detailRaw.reasoning_effort ?? detailRaw.reasoningEffort
           ),
+          service_tier: readDetailString(detailRaw.service_tier ?? detailRaw.serviceTier),
+          executor_type: readDetailString(detailRaw.executor_type ?? detailRaw.executorType),
           latency_ms: latencyMs ?? undefined,
           ttft_ms: ttftMs ?? undefined,
           tokens: readTokens(detailRaw),

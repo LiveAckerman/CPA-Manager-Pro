@@ -180,6 +180,41 @@ func TestManagerFallsBackToRESPWhenHTTPQueueUnsupported(t *testing.T) {
 	})
 }
 
+func TestManagerSkipsUsageControlPayloadsAndRefreshesSnapshots(t *testing.T) {
+	db := newTestStore(t)
+	cfg := testConfig(t, "subscribe")
+	manager := NewManager(cfg, db)
+	manager.snapshotResolver.baseURL = "http://cpa.local:8317"
+	manager.snapshotResolver.managementKey = "management-key"
+	manager.snapshotResolver.expiresAt = time.Now().Add(time.Minute)
+	manager.snapshotResolver.snapshots = map[string]authSnapshot{
+		"auth-1": {Account: "alice@example.com"},
+	}
+
+	err := manager.processItems(context.Background(), RuntimeConfig{}, []string{
+		`{"support_refresh":true}`,
+		`{"refresh":true}`,
+		`{"timestamp":"2026-05-06T00:00:00Z","model":"gpt-test","endpoint":"POST /v1/chat/completions","input_tokens":1,"output_tokens":2}`,
+	})
+	if err != nil {
+		t.Fatalf("process items: %v", err)
+	}
+
+	events, deadLetters, err := db.Counts(context.Background())
+	if err != nil {
+		t.Fatalf("counts: %v", err)
+	}
+	if events != 1 || deadLetters != 0 {
+		t.Fatalf("counts events=%d deadLetters=%d, want 1/0", events, deadLetters)
+	}
+	if manager.snapshotResolver.baseURL != "" ||
+		manager.snapshotResolver.managementKey != "" ||
+		!manager.snapshotResolver.expiresAt.IsZero() ||
+		manager.snapshotResolver.snapshots != nil {
+		t.Fatalf("snapshot cache was not cleared: %#v", manager.snapshotResolver)
+	}
+}
+
 func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))

@@ -356,9 +356,7 @@ export function MonitoringCenterPage() {
       ? t('monitoring.request_monitoring_disabled_body')
       : requestMonitoringAvailability.reason === 'service_unavailable'
         ? t('monitoring.request_monitoring_service_unavailable_body')
-        : requestMonitoringAvailability.reason === 'manager_mismatch'
-          ? t('monitoring.request_monitoring_manager_mismatch_body')
-          : t('monitoring.request_monitoring_not_configured_body');
+        : t('monitoring.request_monitoring_not_configured_body');
   const monitoringBlockingLoading =
     monitoringLoading && (!monitoringScopeTransitioning || !hasMonitoringPresentationSnapshot);
   const overallLoading =

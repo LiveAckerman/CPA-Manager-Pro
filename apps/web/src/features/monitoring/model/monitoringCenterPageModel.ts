@@ -132,7 +132,12 @@ export const buildProviderOptions = (
   rows: MonitoringEventRow[],
   selectedProvider: string,
   t: TFunction
-) => buildProviderOptionsFromValues(rows.map((row) => row.provider), selectedProvider, t);
+) =>
+  buildProviderOptionsFromValues(
+    rows.map((row) => row.provider),
+    selectedProvider,
+    t
+  );
 
 export const buildProviderOptionsFromValues = (
   providers: string[],
@@ -170,7 +175,12 @@ export const buildModelOptions = (
   rows: MonitoringEventRow[],
   selectedModel: string,
   t: TFunction
-) => buildModelOptionsFromValues(rows.map((row) => row.model), selectedModel, t);
+) =>
+  buildModelOptionsFromValues(
+    rows.map((row) => row.model),
+    selectedModel,
+    t
+  );
 
 export const buildModelOptionsFromValues = (
   models: string[],
@@ -189,7 +199,12 @@ export const buildChannelOptions = (
   rows: MonitoringEventRow[],
   selectedChannel: string,
   t: TFunction
-) => buildChannelOptionsFromValues(rows.map((row) => row.channel), selectedChannel, t);
+) =>
+  buildChannelOptionsFromValues(
+    rows.map((row) => row.channel),
+    selectedChannel,
+    t
+  );
 
 export const buildChannelOptionsFromValues = (
   channels: string[],
@@ -484,8 +499,17 @@ const buildRemainingFromUsedPercent = (usedPercent: number | null | undefined) =
   return clampedUsed === null ? null : Math.max(0, 100 - clampedUsed);
 };
 
-const formatQuotaWindowHours = (value: number) =>
+const formatQuotaWindowDurationValue = (value: number) =>
   Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1);
+
+const formatCodexQuotaWindowDuration = (seconds: number) => {
+  const daySeconds = 86_400;
+  const hourSeconds = 3_600;
+  if (seconds >= daySeconds) {
+    return `${formatQuotaWindowDurationValue(seconds / daySeconds)}d`;
+  }
+  return `${formatQuotaWindowDurationValue(seconds / hourSeconds)}h`;
+};
 
 const buildCodexAccountQuotaWindows = (
   windows: CodexQuotaWindow[],
@@ -502,11 +526,10 @@ const buildCodexAccountQuotaWindows = (
       window.limitWindowSeconds > 0 &&
       clampedUsed !== null
     ) {
-      const totalHours = window.limitWindowSeconds / 3600;
-      const usedHours = (totalHours * clampedUsed) / 100;
-      usageLabel = t('codex_quota.window_usage', {
-        used: formatQuotaWindowHours(usedHours),
-        total: formatQuotaWindowHours(totalHours),
+      const usedSeconds = (window.limitWindowSeconds * clampedUsed) / 100;
+      usageLabel = t('codex_quota.window_usage_duration', {
+        used: formatCodexQuotaWindowDuration(usedSeconds),
+        total: formatCodexQuotaWindowDuration(window.limitWindowSeconds),
       });
     }
 

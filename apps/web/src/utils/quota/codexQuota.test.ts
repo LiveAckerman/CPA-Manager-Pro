@@ -46,6 +46,59 @@ describe('buildCodexQuotaWindowInfos', () => {
     });
   });
 
+  it('classifies current Codex monthly-only quota without falling back to five-hour', () => {
+    const payload = {
+      user_id: 'user-test',
+      account_id: 'acct-test',
+      email: 'user@example.test',
+      plan_type: 'free',
+      rate_limit: {
+        allowed: true,
+        limit_reached: false,
+        primary_window: {
+          used_percent: 5,
+          limit_window_seconds: 2_592_000,
+          reset_after_seconds: 2_592_000,
+          reset_at: 1_782_895_966,
+        },
+        secondary_window: null,
+      },
+      code_review_rate_limit: null,
+      additional_rate_limits: null,
+      credits: {
+        has_credits: false,
+        unlimited: false,
+        overage_limit_reached: false,
+        balance: null,
+      },
+      spend_control: {
+        reached: false,
+        individual_limit: null,
+      },
+      rate_limit_reset_credits: {
+        available_count: 0,
+      },
+    };
+
+    const windows = buildCodexQuotaWindowInfos(payload);
+    const classified = classifyCodexRateLimitWindows(payload.rate_limit);
+
+    expect(windows).toMatchObject([
+      {
+        id: 'monthly',
+        labelKey: 'codex_quota.monthly_window',
+        usedPercent: 5,
+        limitWindowSeconds: 2_592_000,
+      },
+    ]);
+    expect(classified.fiveHourWindow).toBeNull();
+    expect(classified.weeklyWindow).toBeNull();
+    expect(classified.monthlyWindow?.used_percent).toBe(5);
+    expect(classified.longWindow).toBe(classified.monthlyWindow);
+    expect(deriveCodexRateLimitUsedPercent(payload.rate_limit)).toBe(5);
+    expect(isCodexRateLimitReached(payload.rate_limit)).toBe(false);
+  });
+
   it('normalizes additional rate limit labels into stable ids and params', () => {
     const windows = buildCodexQuotaWindowInfos({
       additional_rate_limits: [

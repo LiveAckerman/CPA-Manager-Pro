@@ -839,6 +839,8 @@ export const buildUsageDetailsFromAnalyticsEvents = (
     auth_provider_snapshot: readString(item.auth_provider_snapshot),
     auth_project_id_snapshot: readString(item.auth_project_id_snapshot),
     reasoning_effort: readString(item.reasoning_effort),
+    service_tier: readString(item.service_tier),
+    executor_type: readString(item.executor_type),
     latency_ms: item.latency_ms ?? undefined,
     ttft_ms: item.ttft_ms ?? undefined,
     tokens: {

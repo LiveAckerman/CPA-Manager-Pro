@@ -30,60 +30,13 @@ func (s *Service) VerifyHeader(ctx context.Context, authorizationHeader string) 
 }
 
 func (s *Service) VerifyPanelHeader(ctx context.Context, authorizationHeader string) (bool, error) {
-	if ok, err := s.VerifyHeader(ctx, authorizationHeader); err != nil || ok {
-		return ok, err
-	}
-	token := security.ExtractBearerToken(authorizationHeader)
-	if token == "" {
-		return false, nil
-	}
-	cfg, ok, err := s.store.LoadManagerConfig(ctx)
-	if err != nil {
-		return false, err
-	}
-	if ok && cfg.ExternalUsageService.Enabled && cfg.CPAConnection.ManagementKey != "" {
-		return security.EqualHMAC(token, cfg.CPAConnection.ManagementKey), nil
-	}
-	return false, nil
+	return s.VerifyHeader(ctx, authorizationHeader)
 }
 
 func (s *Service) VerifySubmittedExternalConfigHeader(ctx context.Context, authorizationHeader string, cfg store.ManagerConfig) (bool, error) {
-	if ok, err := s.VerifyPanelHeader(ctx, authorizationHeader); err != nil || ok {
-		return ok, err
-	}
-	token := security.ExtractBearerToken(authorizationHeader)
-	if token == "" || !cfg.ExternalUsageService.Enabled || cfg.CPAConnection.ManagementKey == "" {
-		return false, nil
-	}
-	if !security.EqualHMAC(token, cfg.CPAConnection.ManagementKey) {
-		return false, nil
-	}
-	if s.cfg.CPAUpstreamURL != "" && s.cfg.ManagementKey != "" {
-		return false, nil
-	}
-	current, ok, err := s.store.LoadManagerConfig(ctx)
-	if err != nil {
-		return false, err
-	}
-	if ok {
-		return current.ExternalUsageService.Enabled &&
-			current.CPAConnection.ManagementKey != "" &&
-			security.EqualHMAC(token, current.CPAConnection.ManagementKey), nil
-	}
-	setup, ok, err := s.store.LoadSetup(ctx)
-	if err != nil {
-		return false, err
-	}
-	if ok && setup.ManagementKey != "" {
-		return false, nil
-	}
-	return true, nil
+	return s.VerifyHeader(ctx, authorizationHeader)
 }
 
 func (s *Service) PanelUsesExternalManagementKey(ctx context.Context) (bool, error) {
-	cfg, ok, err := s.store.LoadManagerConfig(ctx)
-	if err != nil || !ok {
-		return false, err
-	}
-	return cfg.ExternalUsageService.Enabled && cfg.CPAConnection.ManagementKey != "", nil
+	return false, nil
 }

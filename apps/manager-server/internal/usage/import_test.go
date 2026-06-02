@@ -233,6 +233,8 @@ func TestNormalizeRawReadsCPA7118UsageFields(t *testing.T) {
 	  "api_key": "test-key",
 	  "request_id": "ctx-request-id",
 	  "reasoning_effort": "medium",
+	  "service_tier": "priority",
+	  "executor_type": "codex",
 	  "response_headers": {
 	    "Retry-After": ["30"]
 	  }
@@ -241,8 +243,9 @@ func TestNormalizeRawReadsCPA7118UsageFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
-	if event.RequestID != "ctx-request-id" || event.ReasoningEffort != "medium" {
-		t.Fatalf("event identity/effort = %#v", event)
+	if event.RequestID != "ctx-request-id" || event.ReasoningEffort != "medium" ||
+		event.ServiceTier != "priority" || event.ExecutorType != "codex" {
+		t.Fatalf("event identity/metadata = %#v", event)
 	}
 	if event.InputTokens != 10 || event.OutputTokens != 20 || event.ReasoningTokens != 3 ||
 		event.CachedTokens != 5 || event.CacheReadTokens != 4 || event.CacheCreationTokens != 1 ||
@@ -272,7 +275,8 @@ func TestNormalizeRawReadsCPA7118UsageFields(t *testing.T) {
 		t.Fatalf("model details = %#v", api.Models)
 	}
 	detail := modelEntry.Details[0]
-	if detail.ReasoningEffort != "medium" || detail.Tokens.CacheReadTokens != 4 ||
+	if detail.ReasoningEffort != "medium" || detail.ServiceTier != "priority" ||
+		detail.ExecutorType != "codex" || detail.Tokens.CacheReadTokens != 4 ||
 		detail.Tokens.CacheCreationTokens != 1 || detail.FailStatusCode != 429 ||
 		detail.Tokens.CachedTokens != 0 || detail.Tokens.CacheTokens != 0 ||
 		detail.FailSummary != "rate limit exceeded" || detail.TTFTMS == nil ||

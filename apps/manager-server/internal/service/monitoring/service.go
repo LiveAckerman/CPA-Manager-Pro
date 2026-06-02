@@ -310,6 +310,8 @@ type EventRow struct {
 	AuthProviderSnapshot  string `json:"auth_provider_snapshot"`
 	AuthProjectIDSnapshot string `json:"auth_project_id_snapshot,omitempty"`
 	ReasoningEffort       string `json:"reasoning_effort,omitempty"`
+	ServiceTier           string `json:"service_tier,omitempty"`
+	ExecutorType          string `json:"executor_type,omitempty"`
 	InputTokens           int64  `json:"input_tokens"`
 	OutputTokens          int64  `json:"output_tokens"`
 	CachedTokens          int64  `json:"cached_tokens"`
@@ -1168,6 +1170,8 @@ func buildEvents(page store.EventsPage) *EventsResponse {
 			AuthProviderSnapshot:  item.AuthProviderSnapshot,
 			AuthProjectIDSnapshot: item.AuthProjectIDSnapshot,
 			ReasoningEffort:       item.ReasoningEffort,
+			ServiceTier:           item.ServiceTier,
+			ExecutorType:          item.ExecutorType,
 			InputTokens:           item.InputTokens,
 			OutputTokens:          item.OutputTokens,
 			CachedTokens:          item.CachedTokens,

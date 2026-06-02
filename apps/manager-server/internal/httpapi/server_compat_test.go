@@ -153,9 +153,31 @@ func TestServerCompatSetupConfigAndEnvLock(t *testing.T) {
 	updateBody := `{"config":{"cpaConnection":{"cpaBaseUrl":"` + cpa.URL() + `","managementKey":"management-key"},"collector":{"enabled":false,"collectorMode":"auto","queue":"usage","popSide":"right","batchSize":100,"pollIntervalMs":500,"queryLimit":50000},"externalUsageService":{"enabled":true,"serviceBase":"http://usage.local"}}}`
 	updateRR := testutil.Request(t, handler, http.MethodPut, "/usage-service/config", updateBody, testutil.AdminKey)
 	testutil.RequireStatus(t, updateRR, http.StatusOK)
-	if !strings.Contains(updateRR.Body.String(), `"enabled":false`) ||
-		!strings.Contains(updateRR.Body.String(), `"serviceBase":"http://usage.local"`) {
+	if !strings.Contains(updateRR.Body.String(), `"externalUsageService":{"enabled":false}`) ||
+		strings.Contains(updateRR.Body.String(), "http://usage.local") {
 		t.Fatalf("updated config body = %s", updateRR.Body.String())
+	}
+
+	cpa.ManagementKey = "rotated-management-key"
+	rotateKeyBody := `{"config":{"cpaConnection":{"cpaBaseUrl":"` + cpa.URL() + `","managementKey":"rotated-management-key"},"collector":{"enabled":false,"collectorMode":"auto","queue":"usage","popSide":"right","batchSize":100,"pollIntervalMs":500,"queryLimit":50000}}}`
+	rotateKeyRR := testutil.Request(t, handler, http.MethodPut, "/usage-service/config", rotateKeyBody, testutil.AdminKey)
+	testutil.RequireStatus(t, rotateKeyRR, http.StatusOK)
+	if !strings.Contains(rotateKeyRR.Body.String(), `"cpaBaseUrl":"`+cpa.URL()+`"`) {
+		t.Fatalf("rotated key config body = %s", rotateKeyRR.Body.String())
+	}
+	rotatedSetup, ok, err := db.LoadSetup(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("load rotated setup ok=%v err=%v", ok, err)
+	}
+	if rotatedSetup.CPAUpstreamURL != cpa.URL() || rotatedSetup.ManagementKey != "rotated-management-key" {
+		t.Fatalf("rotated setup = %#v", rotatedSetup)
+	}
+
+	rebindBody := `{"config":{"cpaConnection":{"cpaBaseUrl":"http://other.local","managementKey":"other-key"},"collector":{"enabled":false}}}`
+	rebindRR := testutil.Request(t, handler, http.MethodPut, "/usage-service/config", rebindBody, testutil.AdminKey)
+	testutil.RequireStatus(t, rebindRR, http.StatusConflict)
+	if !strings.Contains(rebindRR.Body.String(), `"code":"cpa_connection_already_bound"`) {
+		t.Fatalf("rebind body = %s", rebindRR.Body.String())
 	}
 
 	envCfg := testutil.NewConfig(t)
@@ -197,7 +219,7 @@ func TestServerCompatInfoIgnoresStaleUninitializedBootstrapState(t *testing.T) {
 	}
 }
 
-func TestServerCompatExternalPanelModeUsesCPAManagementKey(t *testing.T) {
+func TestServerCompatCPAPanelKeyCannotUseManagerOnlyRoutes(t *testing.T) {
 	cpa := testutil.NewCPAMock(t)
 	cfg := testutil.NewConfig(t)
 	handler, db := newCompatHandler(t, cfg, nil)
@@ -206,19 +228,20 @@ func TestServerCompatExternalPanelModeUsesCPAManagementKey(t *testing.T) {
 	testutil.RequireStatus(t, openConfigRR, http.StatusOK)
 
 	configBody := `{"config":{"cpaConnection":{"cpaBaseUrl":"` + cpa.URL() + `","managementKey":"management-key"},"collector":{"enabled":false,"collectorMode":"auto","queue":"usage","popSide":"right","batchSize":100,"pollIntervalMs":500,"queryLimit":50000},"externalUsageService":{"enabled":true,"serviceBase":"http://usage.local"}}}`
-	saveRR := testutil.Request(t, handler, http.MethodPut, "/usage-service/config", configBody, "management-key")
+	saveRR := testutil.Request(t, handler, http.MethodPut, "/usage-service/config", configBody, testutil.AdminKey)
 	testutil.RequireStatus(t, saveRR, http.StatusOK)
-	if !strings.Contains(saveRR.Body.String(), `"serviceBase":"http://usage.local"`) {
+	if !strings.Contains(saveRR.Body.String(), `"externalUsageService":{"enabled":false}`) ||
+		strings.Contains(saveRR.Body.String(), "http://usage.local") {
 		t.Fatalf("save body = %s", saveRR.Body.String())
 	}
 
-	wrongKeyRR := testutil.Request(t, handler, http.MethodGet, "/usage-service/config", "", "wrong-key")
-	testutil.RequireStatus(t, wrongKeyRR, http.StatusUnauthorized)
-	if !strings.Contains(wrongKeyRR.Body.String(), `"code":"invalid_management_key"`) {
-		t.Fatalf("wrong key body = %s", wrongKeyRR.Body.String())
+	cpaKeyConfigRR := testutil.Request(t, handler, http.MethodGet, "/usage-service/config", "", "management-key")
+	testutil.RequireStatus(t, cpaKeyConfigRR, http.StatusUnauthorized)
+	if !strings.Contains(cpaKeyConfigRR.Body.String(), `"code":"invalid_admin_key"`) {
+		t.Fatalf("CPA key config body = %s", cpaKeyConfigRR.Body.String())
 	}
 
-	configRR := testutil.Request(t, handler, http.MethodGet, "/usage-service/config", "", "management-key")
+	configRR := testutil.Request(t, handler, http.MethodGet, "/usage-service/config", "", testutil.AdminKey)
 	testutil.RequireStatus(t, configRR, http.StatusOK)
 	if !strings.Contains(configRR.Body.String(), `"source":"db"`) ||
 		!strings.Contains(configRR.Body.String(), `"cpaBaseUrl":"`+cpa.URL()+`"`) {
@@ -229,8 +252,8 @@ func TestServerCompatExternalPanelModeUsesCPAManagementKey(t *testing.T) {
 		t.Fatalf("insert event: %v", err)
 	}
 	usageRR := testutil.Request(t, handler, http.MethodGet, "/v0/management/usage", "", "management-key")
-	testutil.RequireStatus(t, usageRR, http.StatusOK)
-	if !strings.Contains(usageRR.Body.String(), `"total_requests":1`) {
+	testutil.RequireStatus(t, usageRR, http.StatusUnauthorized)
+	if !strings.Contains(usageRR.Body.String(), `"code":"invalid_admin_key"`) {
 		t.Fatalf("usage body = %s", usageRR.Body.String())
 	}
 

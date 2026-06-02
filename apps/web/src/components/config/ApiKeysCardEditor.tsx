@@ -3,14 +3,12 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import {
-  isUsageServiceId,
-  normalizeUsageServiceBase,
   usageServiceApi,
   type ApiKeyAlias,
 } from '@/services/api/usageService';
-import { useAuthStore, useNotificationStore, useUsageServiceStore } from '@/stores';
+import { useAuthStore, useNotificationStore } from '@/stores';
+import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { copyToClipboard } from '@/utils/clipboard';
-import { detectApiBaseFromLocation } from '@/utils/connection';
 import { maskApiKey } from '@/utils/format';
 import { sha256Hex } from '@/utils/apiKeyHash';
 import { isValidApiKeyCharset } from '@/utils/validation';
@@ -34,10 +32,8 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
   const { t } = useTranslation();
   const showNotification = useNotificationStore((state) => state.showNotification);
   const showConfirmation = useNotificationStore((state) => state.showConfirmation);
-  const apiBase = useAuthStore((state) => state.apiBase);
   const managementKey = useAuthStore((state) => state.managementKey);
-  const usageServiceEnabled = useUsageServiceStore((state) => state.enabled);
-  const usageServiceBase = useUsageServiceStore((state) => state.serviceBase);
+  const featureAvailability = usePanelFeatureAvailability();
   const apiKeys = useMemo(
     () =>
       value
@@ -89,32 +85,11 @@ export const ApiKeysCardEditor = memo(function ApiKeysCardEditor({
     return map;
   }, [apiKeyAliases]);
 
-  const resolveAliasServiceBase = useCallback(async (): Promise<string> => {
-    if (usageServiceEnabled && usageServiceBase) {
-      return usageServiceBase;
-    }
-
-    const candidates = Array.from(
-      new Set(
-        [apiBase, detectApiBaseFromLocation()]
-          .map((candidate) => normalizeUsageServiceBase(candidate || ''))
-          .filter(Boolean)
-      )
-    );
-
-    for (const candidate of candidates) {
-      try {
-        const info = await usageServiceApi.getInfo(candidate);
-        if (isUsageServiceId(info.service)) {
-          return candidate;
-        }
-      } catch {
-        // The regular CPA management API does not expose Usage Service metadata.
-      }
-    }
-
-    return '';
-  }, [apiBase, usageServiceBase, usageServiceEnabled]);
+  const resolveAliasServiceBase = useCallback(
+    async (): Promise<string> =>
+      featureAvailability.managerServiceAvailable ? featureAvailability.managerServiceBase : '',
+    [featureAvailability.managerServiceAvailable, featureAvailability.managerServiceBase]
+  );
 
   useEffect(() => {
     let cancelled = false;

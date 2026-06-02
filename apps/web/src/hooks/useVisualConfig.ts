@@ -324,6 +324,7 @@ function getNextDirtyFields(
       'claudeHeaderStabilizeDeviceProfile',
       'codexHeaderUserAgent',
       'codexHeaderBetaFeatures',
+      'codexIdentityConfuse',
     ] as Array<keyof VisualConfigValues>
   ).forEach(updateScalarDirty);
 
@@ -590,6 +591,7 @@ export function useVisualConfig() {
       const streaming = asRecord(parsed.streaming);
       const claudeHeaderDefaults = asRecord(parsed['claude-header-defaults']);
       const codexHeaderDefaults = asRecord(parsed['codex-header-defaults']);
+      const codex = asRecord(parsed.codex);
 
       const newValues: VisualConfigValues = {
         host: typeof parsed.host === 'string' ? parsed.host : '',
@@ -673,6 +675,7 @@ export function useVisualConfig() {
           typeof codexHeaderDefaults?.['beta-features'] === 'string'
             ? codexHeaderDefaults['beta-features']
             : '',
+        codexIdentityConfuse: Boolean(codex?.['identity-confuse'] ?? codex?.identityConfuse),
 
         quotaSwitchProject: Boolean(quotaExceeded?.['switch-project'] ?? true),
         quotaSwitchPreviewModel: Boolean(quotaExceeded?.['switch-preview-model'] ?? true),
@@ -883,6 +886,29 @@ export function useVisualConfig() {
             values.codexHeaderBetaFeatures
           );
           deleteIfMapEmpty(doc, ['codex-header-defaults']);
+        }
+
+        const codexIdentityConfusePath = ['codex', 'identity-confuse'];
+        const codexIdentityConfuseLegacyPath = ['codex', 'identityConfuse'];
+        if (
+          docHas(doc, ['codex']) ||
+          docHas(doc, codexIdentityConfuseLegacyPath) ||
+          values.codexIdentityConfuse ||
+          dirtyFields.has('codexIdentityConfuse')
+        ) {
+          ensureMapInDoc(doc, ['codex']);
+          if (
+            values.codexIdentityConfuse ||
+            dirtyFields.has('codexIdentityConfuse') ||
+            docHas(doc, codexIdentityConfusePath) ||
+            docHas(doc, codexIdentityConfuseLegacyPath)
+          ) {
+            doc.setIn(codexIdentityConfusePath, values.codexIdentityConfuse);
+          }
+          if (docHas(doc, codexIdentityConfuseLegacyPath)) {
+            doc.deleteIn(codexIdentityConfuseLegacyPath);
+          }
+          deleteIfMapEmpty(doc, ['codex']);
         }
 
         if (

@@ -112,6 +112,8 @@ export const buildEventRows = (
       const sourceKey = sourceMeta.identityKey || `source:${sourceLabel}`;
       const taskKey = `${detail.timestamp}|${sourceKey}|${authIndex}`;
       const reasoningEffort = readString(detail.reasoning_effort ?? detail.reasoningEffort);
+      const serviceTier = readString(detail.service_tier ?? detail.serviceTier);
+      const executorType = readString(detail.executor_type ?? detail.executorType);
       const failStatusCodeRaw = detail.fail_status_code ?? detail.failStatusCode;
       const failStatusCode =
         failStatusCodeRaw === null || failStatusCodeRaw === undefined
@@ -163,6 +165,8 @@ export const buildEventRows = (
         totalTokens,
         totalCost,
         reasoningEffort,
+        serviceTier,
+        executorType,
         failStatusCode: normalizedFailStatusCode,
         failSummary,
         taskKey,
@@ -184,6 +188,8 @@ export const buildEventRows = (
           resolvedModel,
           projectId,
           reasoningEffort,
+          serviceTier,
+          executorType,
           normalizedFailStatusCode,
           failSummary
         ),

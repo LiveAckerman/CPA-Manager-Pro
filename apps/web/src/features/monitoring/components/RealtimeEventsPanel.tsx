@@ -261,6 +261,8 @@ export function RealtimeEventsPanel({
                 row.resolvedModel.trim() &&
                 row.resolvedModel.trim() !== row.model;
               const reasoningEffort = formatOptionalText(row.reasoningEffort);
+              const serviceTier = formatOptionalText(row.serviceTier);
+              const executorType = formatOptionalText(row.executorType);
               const failureDetails = buildFailureDetails(row, t);
               const failureTooltipId = failureDetails
                 ? `${tooltipIdPrefix}-failure-tooltip-${row.id}`
@@ -276,6 +278,9 @@ export function RealtimeEventsPanel({
                       <div className={styles.primaryCell}>
                         <span>{sourceDisplay.primary}</span>
                         {sourceDisplay.meta ? <small>{sourceDisplay.meta}</small> : null}
+                        {executorType !== '-' ? (
+                          <small>{`${t('monitoring.executor_type_short')}: ${executorType}`}</small>
+                        ) : null}
                       </div>
                     </div>
                   </td>
@@ -288,11 +293,16 @@ export function RealtimeEventsPanel({
                     </div>
                   </td>
                   <td>
-                    {reasoningEffort !== '-' ? (
-                      <span className={styles.realtimeReasoningBadge}>{reasoningEffort}</span>
-                    ) : (
-                      <span className={styles.mutedCell}>-</span>
-                    )}
+                    <div className={styles.primaryCell}>
+                      {reasoningEffort !== '-' ? (
+                        <span className={styles.realtimeReasoningBadge}>{reasoningEffort}</span>
+                      ) : (
+                        <span className={styles.mutedCell}>-</span>
+                      )}
+                      {serviceTier !== '-' ? (
+                        <small>{`${t('monitoring.service_tier_short')}: ${serviceTier}`}</small>
+                      ) : null}
+                    </div>
                   </td>
                   <td>
                     <div className={styles.recentStatusCell}>

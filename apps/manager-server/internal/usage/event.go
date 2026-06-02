@@ -18,6 +18,7 @@ type Event struct {
 	TimestampMS           int64  `json:"timestamp_ms"`
 	Timestamp             string `json:"timestamp"`
 	Provider              string `json:"provider,omitempty"`
+	ExecutorType          string `json:"executor_type,omitempty"`
 	Model                 string `json:"model"`
 	RequestedModel        string `json:"requested_model,omitempty"`
 	ResolvedModel         string `json:"resolved_model,omitempty"`
@@ -38,6 +39,7 @@ type Event struct {
 	// ReasoningEffort is the request-side effort setting added by CPA v7.1.18+.
 	// It is not the same as response-side tokens.reasoning_tokens usage.
 	ReasoningEffort     string `json:"reasoning_effort,omitempty"`
+	ServiceTier         string `json:"service_tier,omitempty"`
 	InputTokens         int64  `json:"input_tokens"`
 	OutputTokens        int64  `json:"output_tokens"`
 	ReasoningTokens     int64  `json:"reasoning_tokens"`
@@ -84,6 +86,8 @@ type Detail struct {
 	TTFTMS                *int64 `json:"ttft_ms,omitempty"`
 	ResolvedModel         string `json:"resolved_model,omitempty"`
 	ReasoningEffort       string `json:"reasoning_effort,omitempty"`
+	ServiceTier           string `json:"service_tier,omitempty"`
+	ExecutorType          string `json:"executor_type,omitempty"`
 	Tokens                Tokens `json:"tokens"`
 	Failed                bool   `json:"failed"`
 	FailStatusCode        int    `json:"fail_status_code,omitempty"`
@@ -206,6 +210,7 @@ func NormalizeRaw(raw []byte) (Event, error) {
 		TimestampMS:           timestampMS,
 		Timestamp:             timestamp,
 		Provider:              readString(record, "provider", "type", "auth_type", "authType"),
+		ExecutorType:          readString(record, "executor_type", "executorType"),
 		Model:                 model,
 		RequestedModel:        requestedModel,
 		ResolvedModel:         resolvedModel,
@@ -224,6 +229,7 @@ func NormalizeRaw(raw []byte) (Event, error) {
 		AuthProjectIDSnapshot: readString(record, "auth_project_id_snapshot", "authProjectIdSnapshot", "project_id", "projectId"),
 		AuthSnapshotAtMS:      readInt(record, "auth_snapshot_at_ms", "authSnapshotAtMs"),
 		ReasoningEffort:       readString(record, "reasoning_effort", "reasoningEffort"),
+		ServiceTier:           readString(record, "service_tier", "serviceTier"),
 		InputTokens:           inputTokens,
 		OutputTokens:          outputTokens,
 		ReasoningTokens:       reasoningTokens,
@@ -298,6 +304,8 @@ func BuildPayload(events []Event) Payload {
 			TTFTMS:                event.TTFTMS,
 			ResolvedModel:         event.ResolvedModel,
 			ReasoningEffort:       event.ReasoningEffort,
+			ServiceTier:           event.ServiceTier,
+			ExecutorType:          event.ExecutorType,
 			Failed:                event.Failed,
 			FailStatusCode:        event.FailStatusCode,
 			FailSummary:           event.FailSummary,

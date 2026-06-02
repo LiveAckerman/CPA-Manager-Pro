@@ -9,6 +9,7 @@ import { normalizeNumberValue, normalizeStringValue } from './parsers';
 
 const FIVE_HOUR_SECONDS = 18_000;
 const WEEK_SECONDS = 604_800;
+const MONTH_SECONDS = 2_592_000;
 
 type CodexQuotaWindowMeta = {
   id: string;
@@ -18,6 +19,7 @@ type CodexQuotaWindowMeta = {
 const CODEX_WINDOW_META = {
   codeFiveHour: { id: 'five-hour', labelKey: 'codex_quota.primary_window' },
   codeWeekly: { id: 'weekly', labelKey: 'codex_quota.secondary_window' },
+  codeMonthly: { id: 'monthly', labelKey: 'codex_quota.monthly_window' },
   codeReviewFiveHour: {
     id: 'code-review-five-hour',
     labelKey: 'codex_quota.code_review_primary_window',
@@ -25,6 +27,10 @@ const CODEX_WINDOW_META = {
   codeReviewWeekly: {
     id: 'code-review-weekly',
     labelKey: 'codex_quota.code_review_secondary_window',
+  },
+  codeReviewMonthly: {
+    id: 'code-review-monthly',
+    labelKey: 'codex_quota.code_review_monthly_window',
   },
 } as const satisfies Record<string, CodexQuotaWindowMeta>;
 
@@ -52,10 +58,34 @@ const normalizeWindowId = (raw: string) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
 
+const formatWindowDuration = (seconds: number | null): string => {
+  if (seconds === null || seconds <= 0) return 'unknown';
+  const daySeconds = 86_400;
+  const hourSeconds = 3_600;
+  if (seconds % daySeconds === 0) {
+    const days = seconds / daySeconds;
+    return `${days}d`;
+  }
+  if (seconds % hourSeconds === 0) {
+    const hours = seconds / hourSeconds;
+    return `${hours}h`;
+  }
+  return `${seconds}s`;
+};
+
+const hasExplicitWindowSeconds = (window?: CodexUsageWindow | null): boolean =>
+  getWindowSeconds(window) !== null;
+
 const pickClassifiedWindows = (
   limitInfo?: CodexRateLimitInfo | null,
   options?: { allowOrderFallback?: boolean }
-): { fiveHourWindow: CodexUsageWindow | null; weeklyWindow: CodexUsageWindow | null } => {
+): {
+  fiveHourWindow: CodexUsageWindow | null;
+  weeklyWindow: CodexUsageWindow | null;
+  monthlyWindow: CodexUsageWindow | null;
+  longWindow: CodexUsageWindow | null;
+  windows: CodexUsageWindow[];
+} => {
   const allowOrderFallback = options?.allowOrderFallback ?? true;
   const primaryWindow = limitInfo?.primary_window ?? limitInfo?.primaryWindow ?? null;
   const secondaryWindow = limitInfo?.secondary_window ?? limitInfo?.secondaryWindow ?? null;
@@ -63,27 +93,45 @@ const pickClassifiedWindows = (
 
   let fiveHourWindow: CodexUsageWindow | null = null;
   let weeklyWindow: CodexUsageWindow | null = null;
+  let monthlyWindow: CodexUsageWindow | null = null;
+  let genericLongWindow: CodexUsageWindow | null = null;
+  const windows: CodexUsageWindow[] = [];
 
   for (const window of rawWindows) {
     if (!window) continue;
+    windows.push(window);
     const seconds = getWindowSeconds(window);
     if (seconds === FIVE_HOUR_SECONDS && !fiveHourWindow) {
       fiveHourWindow = window;
     } else if (seconds === WEEK_SECONDS && !weeklyWindow) {
       weeklyWindow = window;
+    } else if (seconds === MONTH_SECONDS && !monthlyWindow) {
+      monthlyWindow = window;
+    } else if (seconds !== null && seconds > FIVE_HOUR_SECONDS && !genericLongWindow) {
+      genericLongWindow = window;
     }
   }
 
   if (allowOrderFallback) {
+    const shouldFallbackPrimary = primaryWindow && !hasExplicitWindowSeconds(primaryWindow);
+    const shouldFallbackSecondary = secondaryWindow && !hasExplicitWindowSeconds(secondaryWindow);
     if (!fiveHourWindow) {
-      fiveHourWindow = primaryWindow && primaryWindow !== weeklyWindow ? primaryWindow : null;
+      fiveHourWindow =
+        shouldFallbackPrimary && primaryWindow !== weeklyWindow ? primaryWindow : null;
     }
     if (!weeklyWindow) {
-      weeklyWindow = secondaryWindow && secondaryWindow !== fiveHourWindow ? secondaryWindow : null;
+      weeklyWindow =
+        shouldFallbackSecondary && secondaryWindow !== fiveHourWindow ? secondaryWindow : null;
     }
   }
 
-  return { fiveHourWindow, weeklyWindow };
+  return {
+    fiveHourWindow,
+    weeklyWindow,
+    monthlyWindow,
+    longWindow: weeklyWindow ?? monthlyWindow ?? genericLongWindow,
+    windows,
+  };
 };
 
 export const classifyCodexRateLimitWindows = pickClassifiedWindows;
@@ -143,30 +191,61 @@ const addCodexRateLimitWindows = (
   windows: CodexQuotaWindowInfo[],
   limitInfo: CodexRateLimitInfo | null | undefined,
   fiveHourMeta: CodexQuotaWindowMeta,
-  weeklyMeta: CodexQuotaWindowMeta
+  weeklyMeta: CodexQuotaWindowMeta,
+  monthlyMeta: CodexQuotaWindowMeta,
+  genericLabelKey: string,
+  genericLabelParams?: Record<string, string | number>
 ) => {
   const limitReached = limitInfo?.limit_reached ?? limitInfo?.limitReached;
   const allowed = limitInfo?.allowed;
   const classified = pickClassifiedWindows(limitInfo);
+  const added = new Set<CodexUsageWindow>();
 
   addCodexWindowInfo(
     windows,
     fiveHourMeta.id,
     fiveHourMeta.labelKey,
-    undefined,
+    genericLabelParams,
     classified.fiveHourWindow,
     limitReached,
     allowed
   );
+  if (classified.fiveHourWindow) added.add(classified.fiveHourWindow);
   addCodexWindowInfo(
     windows,
     weeklyMeta.id,
     weeklyMeta.labelKey,
-    undefined,
+    genericLabelParams,
     classified.weeklyWindow,
     limitReached,
     allowed
   );
+  if (classified.weeklyWindow) added.add(classified.weeklyWindow);
+  addCodexWindowInfo(
+    windows,
+    monthlyMeta.id,
+    monthlyMeta.labelKey,
+    genericLabelParams,
+    classified.monthlyWindow,
+    limitReached,
+    allowed
+  );
+  if (classified.monthlyWindow) added.add(classified.monthlyWindow);
+
+  classified.windows.forEach((window, index) => {
+    if (added.has(window)) return;
+    const seconds = getWindowSeconds(window);
+    const duration = formatWindowDuration(seconds);
+    addCodexWindowInfo(
+      windows,
+      `${genericLabelParams?.name ? `${normalizeWindowId(String(genericLabelParams.name))}-` : ''}window-${duration}-${index}`,
+      genericLabelKey,
+      { ...genericLabelParams, duration },
+      window,
+      limitReached,
+      allowed
+    );
+  });
 };
 
 const addAdditionalRateLimitWindows = (
@@ -184,26 +263,24 @@ const addAdditionalRateLimitWindows = (
       normalizeStringValue(limitItem?.metered_feature ?? limitItem?.meteredFeature) ??
       `additional-${index + 1}`;
     const idPrefix = normalizeWindowId(limitName) || `additional-${index + 1}`;
-    const limitReached = rateInfo.limit_reached ?? rateInfo.limitReached;
-    const allowed = rateInfo.allowed;
 
-    addCodexWindowInfo(
+    addCodexRateLimitWindows(
       windows,
-      `${idPrefix}-five-hour-${index}`,
-      'codex_quota.additional_primary_window',
-      { name: limitName },
-      rateInfo.primary_window ?? rateInfo.primaryWindow ?? null,
-      limitReached,
-      allowed
-    );
-    addCodexWindowInfo(
-      windows,
-      `${idPrefix}-weekly-${index}`,
-      'codex_quota.additional_secondary_window',
-      { name: limitName },
-      rateInfo.secondary_window ?? rateInfo.secondaryWindow ?? null,
-      limitReached,
-      allowed
+      rateInfo,
+      {
+        id: `${idPrefix}-five-hour-${index}`,
+        labelKey: 'codex_quota.additional_primary_window',
+      },
+      {
+        id: `${idPrefix}-weekly-${index}`,
+        labelKey: 'codex_quota.additional_secondary_window',
+      },
+      {
+        id: `${idPrefix}-monthly-${index}`,
+        labelKey: 'codex_quota.additional_monthly_window',
+      },
+      'codex_quota.additional_generic_window',
+      { name: limitName }
     );
   });
 };
@@ -219,13 +296,17 @@ export const buildCodexQuotaWindowInfos = (payload: CodexUsagePayload): CodexQuo
     windows,
     rateLimit,
     CODEX_WINDOW_META.codeFiveHour,
-    CODEX_WINDOW_META.codeWeekly
+    CODEX_WINDOW_META.codeWeekly,
+    CODEX_WINDOW_META.codeMonthly,
+    'codex_quota.generic_window'
   );
   addCodexRateLimitWindows(
     windows,
     codeReviewLimit,
     CODEX_WINDOW_META.codeReviewFiveHour,
-    CODEX_WINDOW_META.codeReviewWeekly
+    CODEX_WINDOW_META.codeReviewWeekly,
+    CODEX_WINDOW_META.codeReviewMonthly,
+    'codex_quota.code_review_generic_window'
   );
   addAdditionalRateLimitWindows(windows, additionalRateLimits);
 

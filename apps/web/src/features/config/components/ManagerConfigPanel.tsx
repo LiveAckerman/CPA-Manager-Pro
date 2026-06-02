@@ -1,11 +1,9 @@
-import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
-import { IconEye, IconEyeOff, IconX } from '@/components/ui/icons';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
-import type { ManagerBindingStatus } from '../ConfigPage';
+import { IconEye, IconEyeOff, IconX } from '@/components/ui/icons';
 import styles from '../ConfigPage.module.scss';
 
 type ManagerConfigPanelProps = {
@@ -14,13 +12,10 @@ type ManagerConfigPanelProps = {
   panelHostedByUsageService: boolean | null;
   detectedPanelBase: string;
   managerRuntimeModeLabel: string;
-  managerServiceBase: string;
-  managerAdminKey: string;
-  managerCPAManagementKey: string;
   managerHasBoundCPAManagementKey: boolean;
-  currentCPAApiBase: string;
+  managerCPAManagementKeyInput: string;
+  managerCPAManagementKeyVisible: boolean;
   managerBoundCPABase: string;
-  managerBindingStatus: ManagerBindingStatus;
   disableControls: boolean;
   canConfigureRequestMonitoring: boolean;
   managerRequestMonitoringEnabled: boolean;
@@ -33,10 +28,10 @@ type ManagerConfigPanelProps = {
   managerConfigSourceLabel: string;
   managerUsageStatisticsEnabled: boolean;
   onRefresh: () => void;
-  onManagerServiceBaseChange: (value: string) => void;
-  onManagerAdminKeyChange: (value: string) => void;
-  onManagerCPAManagementKeyChange: (value: string) => void;
   onRequestMonitoringChange: (value: boolean) => void;
+  onCPAManagementKeyInputChange: (value: string) => void;
+  onCPAManagementKeyClear: () => void;
+  onCPAManagementKeyVisibilityToggle: () => void;
   onCollectorModeChange: (value: string) => void;
   onPollIntervalMsChange: (value: string) => void;
   onBatchSizeChange: (value: string) => void;
@@ -49,13 +44,10 @@ export function ManagerConfigPanel({
   panelHostedByUsageService,
   detectedPanelBase,
   managerRuntimeModeLabel,
-  managerServiceBase,
-  managerAdminKey,
-  managerCPAManagementKey,
   managerHasBoundCPAManagementKey,
-  currentCPAApiBase,
+  managerCPAManagementKeyInput,
+  managerCPAManagementKeyVisible,
   managerBoundCPABase,
-  managerBindingStatus,
   disableControls,
   canConfigureRequestMonitoring,
   managerRequestMonitoringEnabled,
@@ -68,27 +60,18 @@ export function ManagerConfigPanel({
   managerConfigSourceLabel,
   managerUsageStatisticsEnabled,
   onRefresh,
-  onManagerServiceBaseChange,
-  onManagerAdminKeyChange,
-  onManagerCPAManagementKeyChange,
   onRequestMonitoringChange,
+  onCPAManagementKeyInputChange,
+  onCPAManagementKeyClear,
+  onCPAManagementKeyVisibilityToggle,
   onCollectorModeChange,
   onPollIntervalMsChange,
   onBatchSizeChange,
   onQueryLimitChange,
 }: ManagerConfigPanelProps) {
   const { t } = useTranslation();
-  const [cpaKeyRevealed, setCpaKeyRevealed] = useState(false);
-  const isExternalPanel = panelHostedByUsageService !== true;
-  const bindingNoteClass =
-    managerBindingStatus === 'matched'
-      ? styles.managerStatusSuccess
-      : managerBindingStatus === 'mismatched'
-        ? styles.managerStatusDanger
-        : styles.managerStatusWarning;
-  const cpaKeyInputDisabled = disableControls || managerLoading;
-  const cpaKeyHasInput = managerCPAManagementKey.length > 0;
-  const showCpaKeySavingHint = managerSaving && managerCPAManagementKey.trim().length > 0;
+  const keyInputDisabled =
+    disableControls || managerLoading || managerSaving || panelHostedByUsageService !== true;
 
   return (
     <div className={styles.managerConfigPanel}>
@@ -97,7 +80,13 @@ export function ManagerConfigPanel({
           <h2>{t('config_management.manager.title')}</h2>
           <p>{t('config_management.manager.boundary_hint')}</p>
         </div>
-        <Button variant="secondary" size="sm" onClick={onRefresh} loading={managerLoading}>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={onRefresh}
+          loading={managerLoading}
+          disabled={managerSaving}
+        >
           {t('common.refresh')}
         </Button>
       </div>
@@ -115,60 +104,23 @@ export function ManagerConfigPanel({
           <span className={styles.managerRuntimeBadge}>{managerRuntimeModeLabel}</span>
         </div>
 
-        {panelHostedByUsageService === true ? (
-          <div className={styles.managerReadonlyGrid}>
-            <div>
-              <span>{t('config_management.manager.service_base')}</span>
-              <strong>{detectedPanelBase}</strong>
-            </div>
+        <div className={styles.managerReadonlyGrid}>
+          <div>
+            <span>{t('config_management.manager.service_base')}</span>
+            <strong>{detectedPanelBase}</strong>
           </div>
-        ) : (
-          <>
-            <div className={styles.managerConfigGrid}>
-              <Input
-                label={t('config_management.manager.external_service_base')}
-                placeholder="http://127.0.0.1:18317"
-                value={managerServiceBase}
-                onChange={(event) => onManagerServiceBaseChange(event.target.value)}
-                disabled={disableControls || managerLoading}
-                hint={t('config_management.manager.external_service_hint')}
-              />
-              <Input
-                label={t('config_management.manager.admin_key_label')}
-                type="password"
-                placeholder={t('config_management.manager.admin_key_placeholder')}
-                value={managerAdminKey}
-                onChange={(event) => onManagerAdminKeyChange(event.target.value)}
-                disabled={disableControls || managerLoading}
-                autoComplete="off"
-                hint={t('config_management.manager.admin_key_hint')}
-              />
-            </div>
-            <div className={styles.managerReadonlyGrid}>
-              <div>
-                <span>{t('config_management.manager.current_cpa_base')}</span>
-                <strong>{currentCPAApiBase || t('config_management.manager.not_bound')}</strong>
-              </div>
-              <div>
-                <span>{t('config_management.manager.bound_cpa_base')}</span>
-                <strong>{managerBoundCPABase || t('config_management.manager.not_bound')}</strong>
-              </div>
-            </div>
-          </>
-        )}
-
-        {isExternalPanel && managerBindingStatus !== 'unknown' ? (
-          <div className={`${styles.managerStatusNote} ${bindingNoteClass}`}>
-            {t(`config_management.manager.binding_${managerBindingStatus}`)}
+          <div>
+            <span>{t('config_management.manager.bound_cpa_base')}</span>
+            <strong>{managerBoundCPABase || t('config_management.manager.not_bound')}</strong>
           </div>
-        ) : null}
+        </div>
       </section>
 
       <section className={styles.managerSection}>
         <div className={styles.managerSectionHeader}>
           <div>
             <h3>{t('config_management.manager.cpa_management_key_section_title')}</h3>
-            <p>{t('config_management.manager.cpa_management_key_section_hint')}</p>
+            <p>{t('config_management.manager.cpa_management_key_readonly_hint')}</p>
           </div>
           <span
             className={`${styles.managerKeyBindingBadge} ${
@@ -182,54 +134,49 @@ export function ManagerConfigPanel({
               : t('config_management.manager.cpa_management_key_binding_unbound')}
           </span>
         </div>
-
         <Input
           label={t('config_management.manager.cpa_management_key_label')}
-          type={cpaKeyRevealed ? 'text' : 'password'}
+          type={managerCPAManagementKeyVisible ? 'text' : 'password'}
+          value={managerCPAManagementKeyInput}
           placeholder={t('config_management.manager.cpa_management_key_placeholder')}
-          value={managerCPAManagementKey}
-          onChange={(event) => onManagerCPAManagementKeyChange(event.target.value)}
-          disabled={cpaKeyInputDisabled}
-          autoComplete="off"
+          onChange={(event) => onCPAManagementKeyInputChange(event.target.value)}
+          disabled={keyInputDisabled}
           className={styles.managerCpaKeyInput}
+          hint={t('config_management.manager.cpa_management_key_section_hint')}
           rightElement={
             <div className={styles.managerKeyInputActions}>
               <button
                 type="button"
                 className={styles.managerKeyIconButton}
-                onClick={() => setCpaKeyRevealed((prev) => !prev)}
-                disabled={cpaKeyInputDisabled || !cpaKeyHasInput}
-                aria-label={t(
-                  cpaKeyRevealed
+                onClick={onCPAManagementKeyVisibilityToggle}
+                disabled={keyInputDisabled}
+                title={t(
+                  managerCPAManagementKeyVisible
                     ? 'config_management.manager.cpa_management_key_hide'
                     : 'config_management.manager.cpa_management_key_reveal'
                 )}
-                title={t(
-                  cpaKeyRevealed
+                aria-label={t(
+                  managerCPAManagementKeyVisible
                     ? 'config_management.manager.cpa_management_key_hide'
                     : 'config_management.manager.cpa_management_key_reveal'
                 )}
               >
-                {cpaKeyRevealed ? <IconEyeOff size={16} /> : <IconEye size={16} />}
+                {managerCPAManagementKeyVisible ? <IconEyeOff size={16} /> : <IconEye size={16} />}
               </button>
               <button
                 type="button"
                 className={styles.managerKeyIconButton}
-                onClick={() => {
-                  onManagerCPAManagementKeyChange('');
-                  setCpaKeyRevealed(false);
-                }}
-                disabled={cpaKeyInputDisabled || !cpaKeyHasInput}
-                aria-label={t('config_management.manager.cpa_management_key_clear')}
+                onClick={onCPAManagementKeyClear}
+                disabled={keyInputDisabled || !managerCPAManagementKeyInput}
                 title={t('config_management.manager.cpa_management_key_clear')}
+                aria-label={t('config_management.manager.cpa_management_key_clear')}
               >
                 <IconX size={16} />
               </button>
             </div>
           }
         />
-
-        {showCpaKeySavingHint ? (
+        {managerSaving && managerCPAManagementKeyInput.trim() ? (
           <div className={styles.managerKeySavingHint}>
             {t('config_management.manager.cpa_management_key_saving')}
           </div>

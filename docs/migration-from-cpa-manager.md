@@ -114,7 +114,7 @@ If it is not set, the service generates a `cmp_admin_...` value and prints it on
    - If `CPA_MANAGER_ADMIN_KEY` was not set, save `CPA Manager Pro admin key generated: cmp_admin_...`.
    - Ensure there are no `decrypt secret`, `open sqlite`, or `bootstrap manager server` errors.
 2. Open **Configuration -> CPA Manager Pro Configuration**.
-3. Verify CPA URL, request monitoring, collection mode, and polling interval.
+3. Verify the bound CPA URL, request monitoring, collection mode, and polling interval.
 4. Open the dashboard or monitoring page and confirm historical data is visible.
 5. Request `/status` and check collector state, `lastConsumedAt`, `lastInsertedAt`, and `lastError`.
 6. Back up the migrated `/data`; from now on it must include the new `data.key`.
@@ -158,6 +158,6 @@ Stop Plus before rollback. The old CPA-Manager can still read the main usage tab
 ## FAQ
 
 - Old data is missing: the Plus container is probably mounting a new empty `cpa-manager-plus-data` volume instead of the old `cpa-manager-data`.
-- Login returns 401: full Docker mode requires the Manager Server admin key; CPA panel external mode can use the CPA Management Key.
+- Login returns 401: Manager Server endpoints require the Manager Server admin key. The CPA Management Key only logs in to CPA panel mode.
 - Monitoring is empty: enable CPA usage publishing, match `USAGE_COLLECTOR_MODE` to your network path, and make sure only one Manager Server consumes usage from the CPA instance.
 - Decryption fails: confirm `/data/data.key` was not lost or replaced.

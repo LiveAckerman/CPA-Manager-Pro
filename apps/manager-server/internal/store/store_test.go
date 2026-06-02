@@ -26,11 +26,13 @@ func TestStorePersistsAccountSnapshot(t *testing.T) {
 			Endpoint:             "POST /v1/chat/completions",
 			AuthIndex:            "auth-1",
 			APIKeyHash:           "api-key-hash-1",
+			ExecutorType:         "codex",
 			AccountSnapshot:      "alice@example.com",
 			AuthLabelSnapshot:    "Alice",
 			AuthFileSnapshot:     "alice.json",
 			AuthProviderSnapshot: "codex",
 			AuthSnapshotAtMS:     1_778_000_000_100,
+			ServiceTier:          "default",
 			CreatedAtMS:          1_778_000_000_200,
 		},
 	})
@@ -64,6 +66,12 @@ func TestStorePersistsAccountSnapshot(t *testing.T) {
 	if event.APIKeyHash != "api-key-hash-1" {
 		t.Fatalf("APIKeyHash = %q", event.APIKeyHash)
 	}
+	if event.ExecutorType != "codex" {
+		t.Fatalf("ExecutorType = %q", event.ExecutorType)
+	}
+	if event.ServiceTier != "default" {
+		t.Fatalf("ServiceTier = %q", event.ServiceTier)
+	}
 
 	payload := usage.BuildPayload(events)
 	detail := payload.APIs["POST /v1/chat/completions"].Models["gpt-test"].Details[0]
@@ -75,6 +83,12 @@ func TestStorePersistsAccountSnapshot(t *testing.T) {
 	}
 	if detail.AuthProviderSnapshot != "codex" {
 		t.Fatalf("payload AuthProviderSnapshot = %q", detail.AuthProviderSnapshot)
+	}
+	if detail.ExecutorType != "codex" {
+		t.Fatalf("payload ExecutorType = %q", detail.ExecutorType)
+	}
+	if detail.ServiceTier != "default" {
+		t.Fatalf("payload ServiceTier = %q", detail.ServiceTier)
 	}
 }
 

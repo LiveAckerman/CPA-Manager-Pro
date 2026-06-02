@@ -119,7 +119,36 @@ export interface CodexAdditionalRateLimit {
   rateLimit?: CodexRateLimitInfo | null;
 }
 
+export interface CodexCreditsInfo {
+  has_credits?: boolean;
+  hasCredits?: boolean;
+  unlimited?: boolean;
+  overage_limit_reached?: boolean;
+  overageLimitReached?: boolean;
+  balance?: number | string | null;
+  approx_local_messages?: number | string | null;
+  approxLocalMessages?: number | string | null;
+  approx_cloud_messages?: number | string | null;
+  approxCloudMessages?: number | string | null;
+}
+
+export interface CodexSpendControlInfo {
+  reached?: boolean;
+  individual_limit?: number | string | null;
+  individualLimit?: number | string | null;
+}
+
+export interface CodexRateLimitResetCreditsInfo {
+  available_count?: number | string;
+  availableCount?: number | string;
+}
+
 export interface CodexUsagePayload {
+  user_id?: string;
+  userId?: string;
+  account_id?: string;
+  accountId?: string;
+  email?: string;
   plan_type?: string;
   planType?: string;
   rate_limit?: CodexRateLimitInfo | null;
@@ -128,6 +157,16 @@ export interface CodexUsagePayload {
   codeReviewRateLimit?: CodexRateLimitInfo | null;
   additional_rate_limits?: CodexAdditionalRateLimit[] | null;
   additionalRateLimits?: CodexAdditionalRateLimit[] | null;
+  credits?: CodexCreditsInfo | null;
+  spend_control?: CodexSpendControlInfo | null;
+  spendControl?: CodexSpendControlInfo | null;
+  rate_limit_reached_type?: string | null;
+  rateLimitReachedType?: string | null;
+  promo?: unknown;
+  referral_beacon?: unknown;
+  referralBeacon?: unknown;
+  rate_limit_reset_credits?: CodexRateLimitResetCreditsInfo | null;
+  rateLimitResetCredits?: CodexRateLimitResetCreditsInfo | null;
 }
 
 // Claude API payload types
