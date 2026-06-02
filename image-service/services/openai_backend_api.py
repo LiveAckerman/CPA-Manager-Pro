@@ -247,6 +247,81 @@ class OpenAIBackendAPI:
             "has_status_code": True,
         }
 
+    def fetch_session(self, session_cookie: str) -> Dict[str, Any]:
+        """Mint a fresh access_token from a ChatGPT session cookie.
+
+        For accounts that can't use the OAuth refresh_token flow (MFA/2FA
+        accounts where OAuth re-auth demands phone re-verification), but
+        which log in fine at chatgpt.com directly. After a browser login,
+        GET /api/auth/session returns a valid accessToken (~10 day life)
+        without any refresh_token — and the session cookie itself lives
+        ~3 months and "rolls" (re-issues with a fresh expiry) on each call.
+        So this method lets us keep such an account alive indefinitely from
+        a single browser login: re-mint the access_token before it expires,
+        capturing the rolled cookie each time.
+
+        Args:
+            session_cookie: the value of the __Secure-next-auth.session-token
+                cookie (the JWE the extension grabs after browser login).
+
+        Returns a dict:
+            access_token: the freshly minted JWT
+            expires:      ISO timestamp string from the session payload (may be "")
+            account_id:   chatgpt account id (may be "")
+            email:        account email (may be "")
+            plan_type:    account plan (may be "")
+            session_cookie: the cookie to store going forward — the rolled
+                value if the server re-issued one, else the input unchanged.
+
+        Raises InvalidAccessTokenError when the cookie is dead (HTTP 401, or
+        a 200 with no accessToken — which is what /api/auth/session returns
+        once the session is invalidated). Callers treat that as
+        "needs browser re-login".
+        """
+        cookie = (session_cookie or "").strip()
+        if not cookie:
+            raise InvalidAccessTokenError("empty session cookie")
+        path = "/api/auth/session"
+        headers = dict(self.session.headers)
+        # NextAuth session endpoint: cookie-authenticated, NOT Bearer.
+        headers.pop("Authorization", None)
+        headers["Cookie"] = f"__Secure-next-auth.session-token={cookie}"
+        headers["Accept"] = "application/json"
+        # Same target-path headers the rest of the client sets, harmless here.
+        headers["X-OpenAI-Target-Path"] = path
+        response = self.session.get(self.base_url + path, headers=headers, timeout=30)
+        if response.status_code == 401:
+            raise InvalidAccessTokenError(f"{path} failed: HTTP 401 (session cookie dead)")
+        if response.status_code != 200:
+            raise RuntimeError(f"{path} failed: HTTP {response.status_code}")
+        try:
+            data = response.json() or {}
+        except Exception as exc:
+            raise RuntimeError(f"{path}: non-JSON body ({exc})")
+        token = str(data.get("accessToken") or "").strip()
+        if not token:
+            # 200 with no accessToken == session invalidated server-side.
+            raise InvalidAccessTokenError(f"{path}: no accessToken (session invalidated)")
+        account = data.get("account") or {}
+        user = data.get("user") or {}
+        # Capture the rolled cookie if the server re-issued one (sliding
+        # session). curl_cffi exposes Set-Cookie via response.cookies.
+        rolled = cookie
+        try:
+            new_cookie = response.cookies.get("__Secure-next-auth.session-token")
+            if new_cookie:
+                rolled = str(new_cookie).strip()
+        except Exception:
+            pass
+        return {
+            "access_token": token,
+            "expires": str(data.get("expires") or ""),
+            "account_id": str((account or {}).get("id") or ""),
+            "email": str((user or {}).get("email") or ""),
+            "plan_type": str((account or {}).get("planType") or ""),
+            "session_cookie": rolled,
+        }
+
     def get_user_info(self) -> Dict[str, Any]:
         """获取当前 token 的账号信息。"""
         if not self.access_token:

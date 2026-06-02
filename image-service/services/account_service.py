@@ -71,6 +71,8 @@ class _AccountState:
     inflight: int = 0              # concurrent image-gen calls in progress
     in_use: bool = False           # short-term lock — only one picker at a time per account
     status: str = "fresh"          # fresh | active | invalid
+    token_exp: float = 0.0         # access_token expiry (unix secs); 0 = unknown
+    needs_relogin: bool = False    # session-managed account whose cookie died
 
 
 class _CPAFile:
@@ -111,6 +113,28 @@ def _parse_iso(value: str) -> float:
         return 0.0
 
 
+def _jwt_exp(token: str) -> float:
+    """Best-effort parse of a JWT's `exp` claim (unix secs). Returns 0 on
+    any failure — callers treat 0 as 'unknown expiry' and re-mint eagerly."""
+    try:
+        import base64
+        import json as _json
+        payload_b64 = token.split(".")[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)  # pad base64url
+        payload = _json.loads(base64.urlsafe_b64decode(payload_b64))
+        exp = payload.get("exp")
+        return float(exp) if exp is not None else 0.0
+    except Exception:
+        return 0.0
+
+
+# How early (secs) before access_token expiry we re-mint a session-managed
+# account's token from its cookie. Token life is ~10 days; with a 2-day
+# margin we re-mint roughly every 8 days — low enough frequency that the
+# /api/auth/session calls don't look like abuse to OpenAI's risk engine.
+SESSION_REMINT_MARGIN_SECS = 2 * 24 * 60 * 60
+
+
 # ---------------------------------------------------------------------------
 # The service singleton. Keeps state under a single mutex; image gen calls
 # acquire briefly to pick an account, then release while making the slow
@@ -134,6 +158,13 @@ class AccountService:
         # None when no refresh is running; otherwise {done, total, started_at}.
         # Updated under self._lock from refresh_quotas().
         self._refresh_progress: dict | None = None
+        # Session-cookie store for MFA accounts that can't use the OAuth
+        # refresh_token flow. Keyed by CPA file_name → {"cookie": str,
+        # "updated_at": float, "email": str}. Persisted to disk so it
+        # survives restarts (the account pool itself is rebuilt from CPA,
+        # but cookies are ours). Loaded lazily on first use.
+        self._session_cookies: dict[str, dict[str, Any]] = {}
+        self._session_loaded = False
 
     # ----- public API consumed by openai_backend_api + conversation -----
 
@@ -300,6 +331,7 @@ class AccountService:
 
     def list_accounts_redacted(self) -> list[dict[str, Any]]:
         with self._lock:
+            self._load_session_cookies_locked()
             return [self._to_dict_redacted_locked(a) for a in self._accounts.values()]
 
     def list_limited_tokens(self) -> list[str]:
@@ -311,6 +343,148 @@ class AccountService:
     def refresh_accounts(self, tokens: Iterable[str]) -> dict[str, Any]:
         """Compat shim for callers that supply an explicit token list."""
         return self.refresh_quotas(tokens=list(tokens), include_uncached=False)
+
+    # ----- session-cookie accounts (MFA accounts, no refresh_token) -----
+
+    def _session_store_path(self):
+        return config.data_dir / "session_cookies.json"
+
+    def _load_session_cookies_locked(self) -> None:
+        """Lock-held. Lazily load the persisted cookie store once."""
+        if self._session_loaded:
+            return
+        self._session_loaded = True
+        try:
+            import json as _json
+            path = self._session_store_path()
+            if path.exists():
+                data = _json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    self._session_cookies = {
+                        str(k): v for k, v in data.items() if isinstance(v, dict)
+                    }
+                    logger.info("loaded %d session cookies from disk", len(self._session_cookies))
+        except Exception as exc:
+            logger.warning("failed to load session cookies: %s", exc)
+
+    def _save_session_cookies_locked(self) -> None:
+        """Lock-held. Persist the cookie store atomically."""
+        try:
+            import json as _json
+            import os as _os
+            path = self._session_store_path()
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(_json.dumps(self._session_cookies), encoding="utf-8")
+            _os.replace(tmp, path)
+        except Exception as exc:
+            logger.warning("failed to persist session cookies: %s", exc)
+
+    def import_session(
+        self,
+        file_name: str,
+        session_cookie: str,
+        access_token: str = "",
+    ) -> dict[str, Any]:
+        """Register a browser-login session cookie for an account so it can
+        be kept alive WITHOUT a refresh_token. Called by the Chrome
+        extension (via cpa-manager /v0/image/accounts/import-session) after
+        it re-logs-in a 401'd MFA account.
+
+        Stores the cookie (persisted), then immediately mints a fresh
+        access_token from it (or uses the one the extension already grabbed)
+        and marks the account active. From here the background refresher
+        keeps the token fresh from the cookie until the cookie itself dies,
+        at which point the account surfaces in needs_relogin_list().
+
+        The account must already exist in the pool (i.e. CPA still lists the
+        auth file). Returns a small status dict.
+        """
+        file_name = (file_name or "").strip()
+        cookie = (session_cookie or "").strip()
+        if not file_name:
+            return {"ok": False, "error": "file_name required"}
+        if not cookie:
+            return {"ok": False, "error": "session_cookie required"}
+
+        with self._lock:
+            self._load_session_cookies_locked()
+            acct = self._accounts.get(file_name)
+            if acct is None:
+                # Account not in pool — CPA may not list it. Still store the
+                # cookie so a later list-refresh picks it up; but report it.
+                self._session_cookies[file_name] = {
+                    "cookie": cookie,
+                    "updated_at": time.time(),
+                    "email": "",
+                }
+                self._save_session_cookies_locked()
+                return {"ok": False, "error": f"account not found in pool: {file_name}", "cookie_stored": True}
+            self._session_cookies[file_name] = {
+                "cookie": cookie,
+                "updated_at": time.time(),
+                "email": acct.email,
+            }
+            self._save_session_cookies_locked()
+
+        # If the extension already grabbed a token, trust it (saves a call);
+        # otherwise mint one from the cookie now to validate the cookie works.
+        from services.openai_backend_api import InvalidAccessTokenError
+        token = (access_token or "").strip()
+        minted_email = ""
+        try:
+            if not token:
+                result = self._mint_session_token(file_name, cookie)
+                token = result["access_token"]
+                minted_email = result.get("email", "")
+            with self._lock:
+                acct = self._accounts.get(file_name)
+                if acct is not None:
+                    acct.access_token = token
+                    acct.token_exp = _jwt_exp(token)
+                    acct.status = "active"
+                    acct.needs_relogin = False
+                    if minted_email and not acct.email:
+                        acct.email = minted_email
+            return {"ok": True, "file_name": file_name, "token_exp": _jwt_exp(token)}
+        except InvalidAccessTokenError as exc:
+            with self._lock:
+                acct = self._accounts.get(file_name)
+                if acct is not None:
+                    acct.needs_relogin = True
+            return {"ok": False, "error": f"cookie rejected: {exc}", "needs_relogin": True}
+        except Exception as exc:
+            return {"ok": False, "error": f"mint failed: {exc}"}
+
+    def _mint_session_token(self, file_name: str, cookie: str) -> dict[str, Any]:
+        """Call /api/auth/session with the cookie to mint a fresh token.
+        NOT lock-held (does HTTP). On success persists the rolled cookie.
+        Raises InvalidAccessTokenError if the cookie is dead."""
+        from services.openai_backend_api import OpenAIBackendAPI
+        result = OpenAIBackendAPI().fetch_session(cookie)
+        rolled = result.get("session_cookie") or cookie
+        with self._lock:
+            entry = self._session_cookies.get(file_name)
+            if entry is not None and rolled and rolled != entry.get("cookie"):
+                entry["cookie"] = rolled
+                entry["updated_at"] = time.time()
+                self._save_session_cookies_locked()
+        return result
+
+    def needs_relogin_list(self) -> list[dict[str, Any]]:
+        """Accounts whose session cookie has died (mint returned 401) — the
+        Chrome extension targets exactly these for browser re-login, instead
+        of guessing from raw 401s (which include recoverable stale-cache)."""
+        with self._lock:
+            self._load_session_cookies_locked()
+            out = []
+            for acct in self._accounts.values():
+                if acct.needs_relogin:
+                    out.append({
+                        "file_name": acct.file_name,
+                        "email": acct.email,
+                        "reason": "session_cookie_dead",
+                    })
+            return out
 
     def probe_codex_usage(
         self,
@@ -802,12 +976,50 @@ class AccountService:
         return eligible[0]
 
     def _ensure_token_locked(self, acct: _AccountState) -> str:
-        """Lock-held during call; releases briefly for the CPA download which
-        is a blocking I/O."""
+        """Lock-held during call; releases briefly for the HTTP fetch, then
+        re-acquires. For session-cookie accounts, mints from the cookie via
+        /api/auth/session; otherwise downloads the token from CPA."""
+        file_name = acct.file_name
+        self._load_session_cookies_locked()
+        cookie_entry = self._session_cookies.get(file_name)
+        cookie = (cookie_entry or {}).get("cookie") if cookie_entry else None
+
+        if cookie:
+            # Session-managed: reuse the cached token unless it's missing or
+            # within the re-mint margin of expiry; otherwise mint a fresh one
+            # from the cookie. No refresh_token, no CPA download involved.
+            from services.openai_backend_api import InvalidAccessTokenError
+            now = time.time()
+            if acct.access_token and acct.token_exp - now > SESSION_REMINT_MARGIN_SECS:
+                return acct.access_token
+            self._lock.release()
+            reacquired = False
+            try:
+                result = self._mint_session_token(file_name, cookie)
+            except InvalidAccessTokenError:
+                self._lock.acquire()
+                reacquired = True
+                a = self._accounts.get(file_name)
+                if a is not None:
+                    a.needs_relogin = True
+                    a.access_token = ""
+                    a.status = "invalid"
+                raise
+            finally:
+                if not reacquired:
+                    self._lock.acquire()
+            a = self._accounts.get(file_name)
+            if a is None:
+                raise RuntimeError("no available image quota")
+            a.access_token = result["access_token"]
+            a.token_exp = _jwt_exp(result["access_token"])
+            a.status = "active"
+            a.needs_relogin = False
+            return a.access_token
+
+        # Non-session account: existing CPA-download path.
         if acct.access_token:
             return acct.access_token
-        # We need to drop the lock while doing HTTP, then re-acquire.
-        file_name = acct.file_name
         self._lock.release()
         try:
             token = self._download_token_from_cpa(file_name)
@@ -846,6 +1058,11 @@ class AccountService:
     def _to_dict_redacted_locked(self, acct: _AccountState) -> dict[str, Any]:
         d = self._to_dict_locked(acct)
         d["has_access_token"] = bool(acct.access_token)
+        # Session-cookie accounts (MFA, no refresh_token): surface whether
+        # they're cookie-managed and whether the cookie has died so the
+        # panel / extension can show "needs re-login" precisely.
+        d["session_managed"] = acct.file_name in self._session_cookies
+        d["needs_relogin"] = bool(acct.needs_relogin)
         return d
 
 

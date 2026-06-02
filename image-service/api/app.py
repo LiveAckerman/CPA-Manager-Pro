@@ -19,6 +19,17 @@ from services.account_service import account_service
 from services.config import config
 
 
+class ImportSessionRequest(BaseModel):
+    # CPA file name of the account being kept alive via session cookie.
+    file_name: str = Field(..., min_length=1)
+    # The __Secure-next-auth.session-token cookie value the Chrome extension
+    # grabbed after a browser login at chatgpt.com.
+    session_cookie: str = Field(..., min_length=1)
+    # Optional: an access_token the extension already minted from
+    # /api/auth/session. If omitted, image-service mints one from the cookie.
+    access_token: str | None = None
+
+
 class ProbeCodexRequest(BaseModel):
     # CPA file name — stable identifier the image-service uses as primary
     # key in its in-memory account pool. Frontend already has this from
@@ -99,6 +110,28 @@ def create_app() -> FastAPI:
             account_service.refresh_quotas, None, include_uncached
         )
         return result
+
+    @app.post("/api/accounts/import-session")
+    async def import_session_endpoint(body: ImportSessionRequest):
+        # Register a browser-login session cookie for an MFA account that
+        # can't use the OAuth refresh_token flow. image-service then keeps
+        # the account alive by minting access_tokens from the cookie
+        # (/api/auth/session) — no refresh_token, no app_session_terminated.
+        # See account_service.import_session() for the full lifecycle.
+        result = await run_in_threadpool(
+            account_service.import_session,
+            body.file_name,
+            body.session_cookie,
+            body.access_token or "",
+        )
+        return result
+
+    @app.get("/api/accounts/needs-relogin")
+    async def needs_relogin_endpoint():
+        # Accounts whose session cookie has died (mint returned 401) — the
+        # Chrome extension targets exactly these for browser re-login,
+        # instead of guessing from raw 401s.
+        return {"items": account_service.needs_relogin_list()}
 
     @app.post("/api/accounts/probe-codex")
     async def probe_codex_endpoint(body: ProbeCodexRequest):
