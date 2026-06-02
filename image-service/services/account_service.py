@@ -1053,19 +1053,32 @@ class AccountService:
     def _write_auth_file_to_cpa(self, file_name: str, auth_json: dict[str, Any]) -> None:
         """Overwrite an auth file in CPA by re-uploading it under the SAME
         name (multipart POST /v0/management/auth-files). Same filename ==
-        CPA overwrites in place, so no duplicate is created."""
+        CPA overwrites in place, so no duplicate is created.
+
+        curl_cffi (our HTTP client) does NOT accept requests-style `files=`;
+        it requires its own CurlMime. Build the multipart part by hand."""
         import json as _json
+        from curl_cffi import CurlMime
         url = config.cpa_base_url.rstrip("/") + "/v0/management/auth-files"
         payload = _json.dumps(auth_json).encode("utf-8")
-        files = {"file": (file_name, payload, "application/json")}
-        r = self._cpa_session.post(
-            url,
-            files=files,
-            headers={"Authorization": f"Bearer {config.cpa_management_key}"},
-            timeout=20,
-        )
+        mp = CurlMime()
+        try:
+            mp.addpart(
+                name="file",
+                filename=file_name,
+                content_type="application/json",
+                data=payload,
+            )
+            r = self._cpa_session.post(
+                url,
+                multipart=mp,
+                headers={"Authorization": f"Bearer {config.cpa_management_key}"},
+                timeout=20,
+            )
+        finally:
+            mp.close()
         if r.status_code // 100 != 2:
-            raise RuntimeError(f"CPA upload {file_name} failed: HTTP {r.status_code}")
+            raise RuntimeError(f"CPA upload {file_name} failed: HTTP {r.status_code} {r.text[:160]}")
 
     def _sync_token_to_cpa(self, file_name: str, access_token: str) -> bool:
         """Write a freshly-minted (cookie-derived) access_token back into the
