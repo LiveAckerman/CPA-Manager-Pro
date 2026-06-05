@@ -753,3 +753,80 @@ def collect_image_outputs(outputs: Iterable[ImageOutput]) -> dict[str, Any]:
         if text:
             result["message"] = text
     return result
+
+
+# --- text (web ChatGPT) over the cookie-account pool ----------------------
+#
+# The cookie-minted tokens are ChatGPT *web* session tokens: they can drive
+# the web conversation API (/backend-api/conversation) but NOT the Codex
+# `/v1/responses` API (that needs a refresh_token OAuth token). This wrapper
+# exposes plain-text chat through the same pool the image path uses, so the
+# free cookie accounts can serve /v1/chat/completions + /v1/responses as a
+# fallback when CPA's codex provider has no auth for the requested model.
+#
+# Mirrors stream_image_outputs_with_pool: token-invalid → evict + retry;
+# transient (timeout / 5xx / reset) → try another account within budget;
+# anything emitted already → propagate (can't un-yield a streamed delta).
+TEXT_FALLBACK_MODEL = "auto"
+
+
+def stream_text_with_pool(request: ConversationRequest) -> Iterator[str]:
+    """Yield assistant text deltas, picking a working cookie account from the
+    pool and falling back to another on pre-emit failure."""
+    last_error = ""
+    transient_retries = 0
+    while True:
+        try:
+            token = account_service.get_available_access_token()
+        except RuntimeError as exc:
+            raise ImageGenerationError(
+                str(exc) or "no available text account",
+                status_code=503,
+                error_type="server_error",
+                code="auth_unavailable",
+            ) from exc
+
+        emitted_for_token = False
+        try:
+            backend = OpenAIBackendAPI(access_token=token)
+            for event in conversation_events(
+                backend,
+                messages=request.messages,
+                model=TEXT_FALLBACK_MODEL,
+                prompt=request.prompt,
+            ):
+                if event.get("type") != "conversation.delta":
+                    continue
+                delta = str(event.get("delta") or "")
+                if delta:
+                    emitted_for_token = True
+                    yield delta
+            account_service.mark_image_result(token, True)
+            account_service.release_image_slot(token)
+            return
+        except ImageGenerationError:
+            account_service.mark_image_result(token, False)
+            account_service.release_image_slot(token)
+            raise
+        except Exception as exc:  # noqa: BLE001 — classify below
+            account_service.mark_image_result(token, False)
+            account_service.release_image_slot(token)
+            last_error = str(exc)
+            logger.warning({"event": "text_stream_fail", "request_token": token, "error": last_error[:160]})
+            if not emitted_for_token and is_token_invalid_error(last_error):
+                account_service.remove_invalid_token(token, "text_stream")
+                continue
+            if (
+                not emitted_for_token
+                and is_retryable_error(last_error)
+                and transient_retries < max(0, int(config.image_transient_retry_max))
+            ):
+                transient_retries += 1
+                continue
+            raise ImageGenerationError(image_stream_error_message(last_error), status_code=502) from exc
+
+
+def collect_text_with_pool(request: ConversationRequest) -> str:
+    """Non-streaming convenience: run the pooled text conversation to
+    completion and return the full assistant text."""
+    return "".join(stream_text_with_pool(request))

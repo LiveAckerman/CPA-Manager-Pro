@@ -58,6 +58,10 @@ func New(appCtx *app.Context) http.Handler {
 	// /v1/* CPA passthrough that lives in handleRoot.
 	mux.HandleFunc("/v1/images/generations", middleware.WithCORS(appCtx.Config, imageGenHandler.Handle))
 	mux.HandleFunc("/v1/images/edits", middleware.WithCORS(appCtx.Config, imageGenHandler.Handle))
+	// Smart text router — try CPA codex first, fall back to image-service
+	// web text (cookie accounts) when codex has no auth for the model.
+	mux.HandleFunc("/v1/responses", middleware.WithCORS(appCtx.Config, imageGenHandler.HandleText))
+	mux.HandleFunc("/v1/chat/completions", middleware.WithCORS(appCtx.Config, imageGenHandler.HandleText))
 	// chatgpt2api reverse-proxy prefixes.
 	if imageProxyHandler != nil {
 		mux.HandleFunc("/openai/", middleware.WithCORS(appCtx.Config, imageProxyHandler.Handle))
