@@ -22,6 +22,8 @@ import { entriesToModels, modelsToEntries } from '@/components/ui/modelInputList
 import { excludedModelsToText, parseExcludedModels } from '@/components/providers/utils';
 import type { GeminiFormState } from '@/components/providers';
 import { parseProviderIndexParam } from '@/features/aiProviders/model/routeParams';
+import { ProviderTestModal } from './ProviderTestModal';
+import { draftTestPreset } from './providerTestPresets';
 import layoutStyles from './AiProvidersEditLayout.module.scss';
 import styles from './AiProvidersPage.module.scss';
 
@@ -103,6 +105,7 @@ export function AiProvidersGeminiEditPage() {
   const [form, setForm] = useState<GeminiFormState>(() => buildEmptyForm());
   const [baseline, setBaseline] = useState(() => buildGeminiBaseline(buildEmptyForm()));
 
+  const [testOpen, setTestOpen] = useState(false);
   const [modelDiscoveryOpen, setModelDiscoveryOpen] = useState(false);
   const [modelDiscoveryEndpoint, setModelDiscoveryEndpoint] = useState('');
   const [discoveredModels, setDiscoveredModels] = useState<ModelInfo[]>([]);
@@ -624,6 +627,14 @@ export function AiProvidersGeminiEditPage() {
                   >
                     {t('ai_providers.gemini_models_fetch_button')}
                   </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setTestOpen(true)}
+                    disabled={disableControls || saving}
+                  >
+                    {t('ai_providers.provider_test_title')}
+                  </Button>
                 </div>
               </div>
               <div className={styles.sectionHint}>{t('ai_providers.gemini_models_hint')}</div>
@@ -800,6 +811,19 @@ export function AiProvidersGeminiEditPage() {
                 )}
               </div>
             </Modal>
+
+            <ProviderTestModal
+              open={testOpen}
+              onClose={() => setTestOpen(false)}
+              {...draftTestPreset('gemini', 'GEMINI', {
+                label: form.prefix || form.baseUrl || t('ai_providers.gemini_title'),
+                baseUrl: form.baseUrl,
+                apiKey: form.apiKey.trim(),
+                authIndex: normalizeAuthIndex(form.authIndex) ?? undefined,
+                headers: buildHeaderObject(form.headers),
+                modelNames: form.modelEntries.map((e) => e.name.trim()).filter(Boolean),
+              })}
+            />
           </>
         )}
       </Card>

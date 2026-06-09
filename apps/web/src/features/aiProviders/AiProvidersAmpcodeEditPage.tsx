@@ -20,6 +20,8 @@ import {
   entriesToAmpcodeUpstreamApiKeys,
 } from '@/components/providers/utils';
 import type { AmpcodeFormState } from '@/components/providers';
+import { ProviderTestModal } from './ProviderTestModal';
+import { draftTestPreset } from './providerTestPresets';
 import layoutStyles from './AiProvidersEditLayout.module.scss';
 
 type LocationState = { fromAiProviders?: boolean } | null;
@@ -106,6 +108,7 @@ export function AiProvidersAmpcodeEditPage() {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [baseline, setBaseline] = useState(() => buildAmpcodeBaseline(buildAmpcodeFormState(null)));
+  const [testOpen, setTestOpen] = useState(false);
   const initializedRef = useRef(false);
   const mountedRef = useRef(false);
 
@@ -531,7 +534,31 @@ export function AiProvidersAmpcodeEditPage() {
             disabled={loading || saving || disableControls}
           />
           <div className="hint">{t('ai_providers.ampcode_model_mappings_hint')}</div>
+          <div style={{ marginTop: 10 }}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setTestOpen(true)}
+              disabled={loading || saving || disableControls}
+            >
+              {t('ai_providers.provider_test_title')}
+            </Button>
+          </div>
         </div>
+
+        <ProviderTestModal
+          open={testOpen}
+          onClose={() => setTestOpen(false)}
+          {...draftTestPreset('ampcode', 'AMPCODE', {
+            label: form.upstreamUrl || 'Ampcode',
+            baseUrl: form.upstreamUrl,
+            apiKey:
+              form.upstreamApiKey.trim() ||
+              form.upstreamApiKeyEntries.find((e) => e.upstreamApiKey.trim())?.upstreamApiKey.trim() ||
+              '',
+            modelNames: form.mappingEntries.map((e) => e.name.trim()).filter(Boolean),
+          })}
+        />
       </Card>
     </SecondaryScreenShell>
   );

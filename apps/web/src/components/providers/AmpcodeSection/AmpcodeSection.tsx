@@ -12,6 +12,7 @@ interface AmpcodeSectionProps {
   disableControls: boolean;
   isSwitching: boolean;
   onEdit: () => void;
+  onTest?: () => void;
 }
 
 export function AmpcodeSection({
@@ -20,6 +21,7 @@ export function AmpcodeSection({
   disableControls,
   isSwitching,
   onEdit,
+  onTest,
 }: AmpcodeSectionProps) {
   const { t } = useTranslation();
   const showLoadingPlaceholder = loading && !config;
@@ -34,13 +36,25 @@ export function AmpcodeSection({
           </span>
         }
         extra={
-          <Button
-            size="sm"
-            onClick={onEdit}
-            disabled={disableControls || loading || isSwitching}
-          >
-            {t('common.edit')}
-          </Button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {onTest && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={onTest}
+                disabled={disableControls || loading || isSwitching}
+              >
+                {t('ai_providers.provider_test_action')}
+              </Button>
+            )}
+            <Button
+              size="sm"
+              onClick={onEdit}
+              disabled={disableControls || loading || isSwitching}
+            >
+              {t('common.edit')}
+            </Button>
+          </div>
         }
       >
         {showLoadingPlaceholder ? (

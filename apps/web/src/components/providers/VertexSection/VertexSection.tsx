@@ -28,6 +28,7 @@ interface VertexSectionProps {
   onEdit: (index: number) => void;
   onDelete: (index: number) => void;
   onToggle: (index: number, enabled: boolean) => void;
+  onTest?: (index: number) => void;
 }
 
 export function VertexSection({
@@ -40,6 +41,7 @@ export function VertexSection({
   onEdit,
   onDelete,
   onToggle,
+  onTest,
 }: VertexSectionProps) {
   const { t } = useTranslation();
   const actionsDisabled = disableControls || loading || isSwitching;
@@ -88,12 +90,24 @@ export function VertexSection({
           actionsDisabled={actionsDisabled}
           getRowDisabled={(item) => hasDisableAllModelsRule(item.excludedModels)}
           renderExtraActions={(item, index) => (
-            <ToggleSwitch
-              label={t('ai_providers.config_toggle_label')}
-              checked={!hasDisableAllModelsRule(item.excludedModels)}
-              disabled={toggleDisabled}
-              onChange={(value) => void onToggle(index, value)}
-            />
+            <>
+              {onTest && (
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  disabled={actionsDisabled}
+                  onClick={() => onTest(index)}
+                >
+                  {t('ai_providers.provider_test_action')}
+                </Button>
+              )}
+              <ToggleSwitch
+                label={t('ai_providers.config_toggle_label')}
+                checked={!hasDisableAllModelsRule(item.excludedModels)}
+                disabled={toggleDisabled}
+                onChange={(value) => void onToggle(index, value)}
+              />
+            </>
           )}
           renderContent={(item, index) => {
             const stats = getProviderTotalStats(

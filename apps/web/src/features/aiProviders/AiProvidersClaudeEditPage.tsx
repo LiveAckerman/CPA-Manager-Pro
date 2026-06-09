@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Card } from '@/components/ui/Card';
@@ -10,42 +10,18 @@ import { ModelInputList } from '@/components/ui/ModelInputList';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { useEdgeSwipeBack } from '@/hooks/useEdgeSwipeBack';
 import { SecondaryScreenShell } from '@/components/common/SecondaryScreenShell';
-import { apiCallApi, getApiCallErrorMessage } from '@/services/api';
-import { useNotificationStore } from '@/stores';
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import { buildHeaderObject } from '@/utils/headers';
-import { buildClaudeMessagesEndpoint, parseTextList } from '@/components/providers/utils';
+import { parseTextList } from '@/components/providers/utils';
 import type { ClaudeEditOutletContext } from './AiProvidersClaudeEditLayout';
+import { ProviderTestModal } from './ProviderTestModal';
+import { draftTestPreset } from './providerTestPresets';
 import styles from './AiProvidersPage.module.scss';
 import layoutStyles from './AiProvidersEditLayout.module.scss';
-
-const CLAUDE_TEST_TIMEOUT_MS = 30_000;
-const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
-
-const getErrorMessage = (err: unknown) => {
-  if (err instanceof Error) return err.message;
-  if (typeof err === 'string') return err;
-  return '';
-};
-
-const hasHeader = (headers: Record<string, string>, name: string) => {
-  const target = name.toLowerCase();
-  return Object.keys(headers).some((key) => key.toLowerCase() === target);
-};
-
-const resolveBearerTokenFromAuthorization = (headers: Record<string, string>): string => {
-  const entry = Object.entries(headers).find(([key]) => key.toLowerCase() === 'authorization');
-  if (!entry) return '';
-  const value = String(entry[1] ?? '').trim();
-  if (!value) return '';
-  const match = value.match(/^Bearer\s+(.+)$/i);
-  return match?.[1]?.trim() || '';
-};
 
 export function AiProvidersClaudeEditPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { showNotification } = useNotificationStore();
   const {
     hasIndexParam,
     invalidIndexParam,
@@ -56,12 +32,6 @@ export function AiProvidersClaudeEditPage() {
     form,
     setForm,
     testModel,
-    setTestModel,
-    testStatus,
-    setTestStatus,
-    testMessage,
-    setTestMessage,
-    availableModels,
     handleBack,
     handleSave,
   } = useOutletContext<ClaudeEditOutletContext>();
@@ -71,7 +41,8 @@ export function AiProvidersClaudeEditPage() {
     : t('ai_providers.claude_add_modal_title');
 
   const swipeRef = useEdgeSwipeBack({ onBack: handleBack });
-  const [isTesting, setIsTesting] = useState(false);
+  const [isTesting] = useState(false);
+  const [testOpen, setTestOpen] = useState(false);
   const lastCloakConfigRef = useRef<typeof form.cloak>(null);
 
   useEffect(() => {
@@ -124,152 +95,9 @@ export function AiProvidersClaudeEditPage() {
     return 'auto';
   }, [form.cloak?.mode]);
 
-  const connectivityConfigSignature = useMemo(() => {
-    const headersSignature = form.headers
-      .map((entry) => `${entry.key.trim()}:${entry.value.trim()}`)
-      .join('|');
-    const modelsSignature = form.modelEntries
-      .map((entry) => `${entry.name.trim()}:${entry.alias.trim()}`)
-      .join('|');
-    return [
-      form.apiKey.trim(),
-      normalizeAuthIndex(form.authIndex) ?? '',
-      form.baseUrl?.trim() ?? '',
-      testModel.trim(),
-      headersSignature,
-      modelsSignature,
-    ].join('||');
-  }, [form.apiKey, form.authIndex, form.baseUrl, form.headers, form.modelEntries, testModel]);
-
-  const previousConnectivityConfigRef = useRef(connectivityConfigSignature);
-
-  useEffect(() => {
-    if (previousConnectivityConfigRef.current === connectivityConfigSignature) {
-      return;
-    }
-    previousConnectivityConfigRef.current = connectivityConfigSignature;
-    setTestStatus('idle');
-    setTestMessage('');
-  }, [connectivityConfigSignature, setTestMessage, setTestStatus]);
-
   const openClaudeModelDiscovery = () => {
     navigate('models');
   };
-
-  const runClaudeConnectivityTest = useCallback(async () => {
-    if (isTesting) return;
-
-    const modelName = testModel.trim() || availableModels[0] || '';
-    if (!modelName) {
-      const message = t('ai_providers.claude_test_model_required');
-      setTestStatus('error');
-      setTestMessage(message);
-      showNotification(message, 'error');
-      return;
-    }
-
-    const customHeaders = buildHeaderObject(form.headers);
-    const apiKey = form.apiKey.trim();
-    const keyAuthIndex = normalizeAuthIndex(form.authIndex) ?? undefined;
-    const hasApiKeyHeader = hasHeader(customHeaders, 'x-api-key');
-    const apiKeyFromAuthorization = resolveBearerTokenFromAuthorization(customHeaders);
-    const resolvedApiKey = apiKey || apiKeyFromAuthorization;
-
-    if (!resolvedApiKey && !hasApiKeyHeader && !keyAuthIndex) {
-      const message = t('ai_providers.claude_test_key_required');
-      setTestStatus('error');
-      setTestMessage(message);
-      showNotification(message, 'error');
-      return;
-    }
-
-    const endpoint = buildClaudeMessagesEndpoint(form.baseUrl ?? '');
-    if (!endpoint) {
-      const message = t('ai_providers.claude_test_endpoint_invalid');
-      setTestStatus('error');
-      setTestMessage(message);
-      showNotification(message, 'error');
-      return;
-    }
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...customHeaders,
-    };
-
-    if (!hasHeader(headers, 'anthropic-version')) {
-      headers['anthropic-version'] = DEFAULT_ANTHROPIC_VERSION;
-    }
-    if (!Object.prototype.hasOwnProperty.call(headers, 'Anthropic-Version')) {
-      headers['Anthropic-Version'] = headers['anthropic-version'] ?? DEFAULT_ANTHROPIC_VERSION;
-    }
-
-    const tokenValue = resolvedApiKey || (keyAuthIndex ? '$TOKEN$' : '');
-
-    if (!hasApiKeyHeader && tokenValue) {
-      headers['x-api-key'] = tokenValue;
-    }
-    if (!Object.prototype.hasOwnProperty.call(headers, 'X-Api-Key') && tokenValue) {
-      headers['X-Api-Key'] = tokenValue;
-    }
-
-    setIsTesting(true);
-    setTestStatus('loading');
-    setTestMessage(t('ai_providers.claude_test_running'));
-
-    try {
-      const result = await apiCallApi.request(
-        {
-          method: 'POST',
-          authIndex: keyAuthIndex,
-          url: endpoint,
-          header: headers,
-          data: JSON.stringify({
-            model: modelName,
-            max_tokens: 8,
-            messages: [{ role: 'user', content: 'Hi' }],
-          }),
-        },
-        { timeout: CLAUDE_TEST_TIMEOUT_MS }
-      );
-
-      if (result.statusCode < 200 || result.statusCode >= 300) {
-        throw new Error(getApiCallErrorMessage(result));
-      }
-
-      const message = t('ai_providers.claude_test_success');
-      setTestStatus('success');
-      setTestMessage(message);
-      showNotification(message, 'success');
-    } catch (err: unknown) {
-      const message = getErrorMessage(err);
-      const errorCode =
-        typeof err === 'object' && err !== null && 'code' in err
-          ? String((err as { code?: string }).code)
-          : '';
-      const isTimeout = errorCode === 'ECONNABORTED' || message.toLowerCase().includes('timeout');
-      const resolvedMessage = isTimeout
-        ? t('ai_providers.claude_test_timeout', { seconds: CLAUDE_TEST_TIMEOUT_MS / 1000 })
-        : `${t('ai_providers.claude_test_failed')}: ${message || t('common.unknown_error')}`;
-      setTestStatus('error');
-      setTestMessage(resolvedMessage);
-      showNotification(resolvedMessage, 'error');
-    } finally {
-      setIsTesting(false);
-    }
-  }, [
-    availableModels,
-    form.apiKey,
-    form.authIndex,
-    form.baseUrl,
-    form.headers,
-    isTesting,
-    setTestMessage,
-    setTestStatus,
-    showNotification,
-    t,
-    testModel,
-  ]);
 
   return (
     <SecondaryScreenShell
@@ -410,65 +238,35 @@ export function AiProvidersClaudeEditPage() {
 
               <div className={styles.modelTestPanel}>
                 <div className={styles.modelTestMeta}>
-                  <label className={styles.modelTestLabel}>{t('ai_providers.claude_test_title')}</label>
+                  <label className={styles.modelTestLabel}>{t('ai_providers.provider_test_title')}</label>
                   <span className={styles.modelTestHint}>{t('ai_providers.claude_test_hint')}</span>
                 </div>
                 <div className={styles.modelTestControls}>
-                  <Select
-                    value={testModel}
-                    options={modelSelectOptions}
-                    onChange={(value) => {
-                      setTestModel(value);
-                      setTestStatus('idle');
-                      setTestMessage('');
-                    }}
-                    placeholder={
-                      availableModels.length
-                        ? t('ai_providers.claude_test_select_placeholder')
-                        : t('ai_providers.claude_test_select_empty')
-                    }
-                    className={styles.openaiTestSelect}
-                    ariaLabel={t('ai_providers.claude_test_title')}
-                    disabled={
-                      saving ||
-                      disableControls ||
-                      isTesting ||
-                      testStatus === 'loading' ||
-                      availableModels.length === 0
-                    }
-                  />
                   <Button
-                    variant={testStatus === 'error' ? 'danger' : 'secondary'}
+                    variant="secondary"
                     size="sm"
-                    onClick={() => void runClaudeConnectivityTest()}
-                    loading={testStatus === 'loading'}
-                    disabled={
-                      saving ||
-                      disableControls ||
-                      isTesting ||
-                      testStatus === 'loading' ||
-                      availableModels.length === 0
-                    }
+                    onClick={() => setTestOpen(true)}
+                    disabled={saving || disableControls}
                     className={styles.modelTestAllButton}
                   >
-                    {t('ai_providers.claude_test_action')}
+                    {t('ai_providers.provider_test_title')}
                   </Button>
                 </div>
               </div>
 
-              {testMessage && (
-                <div
-                  className={`status-badge ${
-                    testStatus === 'error'
-                      ? 'error'
-                      : testStatus === 'success'
-                        ? 'success'
-                        : 'muted'
-                  }`}
-                >
-                  {testMessage}
-                </div>
-              )}
+              <ProviderTestModal
+                open={testOpen}
+                onClose={() => setTestOpen(false)}
+                {...draftTestPreset('claude', 'CLAUDE', {
+                  label: form.prefix || form.baseUrl || t('ai_providers.claude_title'),
+                  baseUrl: form.baseUrl,
+                  apiKey: form.apiKey.trim(),
+                  authIndex: normalizeAuthIndex(form.authIndex) ?? undefined,
+                  headers: buildHeaderObject(form.headers),
+                  modelNames: modelSelectOptions.map((o) => o.value),
+                  defaultModel: testModel,
+                })}
+              />
             </div>
 
             <div className="form-group">

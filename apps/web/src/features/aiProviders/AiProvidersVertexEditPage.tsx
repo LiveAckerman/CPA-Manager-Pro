@@ -18,6 +18,8 @@ import { buildHeaderObject, headersToEntries, normalizeHeaderEntries } from '@/u
 import { areKeyValueEntriesEqual, areModelEntriesEqual, areStringArraysEqual } from '@/utils/compare';
 import type { VertexFormState } from '@/components/providers';
 import { parseProviderIndexParam } from '@/features/aiProviders/model/routeParams';
+import { ProviderTestModal } from './ProviderTestModal';
+import { draftTestPreset } from './providerTestPresets';
 import layoutStyles from './AiProvidersEditLayout.module.scss';
 
 type LocationState = { fromAiProviders?: boolean } | null;
@@ -86,6 +88,7 @@ export function AiProvidersVertexEditPage() {
   const [error, setError] = useState('');
   const [form, setForm] = useState<VertexFormState>(() => buildEmptyForm());
   const [baseline, setBaseline] = useState(() => buildVertexBaseline(buildEmptyForm()));
+  const [testOpen, setTestOpen] = useState(false);
 
   const hasIndexParam = typeof params.index === 'string';
   const editIndex = useMemo(() => parseProviderIndexParam(params.index), [params.index]);
@@ -382,6 +385,16 @@ export function AiProvidersVertexEditPage() {
                 removeButtonAriaLabel={t('common.delete')}
                 disabled={disableControls || saving}
               />
+              <div style={{ marginTop: 10 }}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setTestOpen(true)}
+                  disabled={disableControls || saving}
+                >
+                  {t('ai_providers.provider_test_title')}
+                </Button>
+              </div>
             </div>
             <div className="form-group">
               <label>{t('ai_providers.excluded_models_label')}</label>
@@ -395,6 +408,18 @@ export function AiProvidersVertexEditPage() {
               />
               <div className="hint">{t('ai_providers.excluded_models_hint')}</div>
             </div>
+
+            <ProviderTestModal
+              open={testOpen}
+              onClose={() => setTestOpen(false)}
+              {...draftTestPreset('vertex', 'VERTEX', {
+                label: form.prefix || form.baseUrl || t('ai_providers.vertex_title'),
+                baseUrl: form.baseUrl,
+                apiKey: form.apiKey.trim(),
+                headers: buildHeaderObject(form.headers),
+                modelNames: form.modelEntries.map((e) => e.name.trim()).filter(Boolean),
+              })}
+            />
           </>
         )}
       </Card>

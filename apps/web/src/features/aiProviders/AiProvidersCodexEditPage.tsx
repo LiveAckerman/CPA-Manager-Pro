@@ -23,6 +23,8 @@ import { excludedModelsToText, parseExcludedModels } from '@/components/provider
 import type { ProviderFormState } from '@/components/providers';
 import type { ModelInfo } from '@/utils/models';
 import { parseProviderIndexParam } from '@/features/aiProviders/model/routeParams';
+import { ProviderTestModal } from './ProviderTestModal';
+import { draftTestPreset } from './providerTestPresets';
 import layoutStyles from './AiProvidersEditLayout.module.scss';
 import styles from './AiProvidersPage.module.scss';
 
@@ -108,6 +110,7 @@ export function AiProvidersCodexEditPage() {
   const [form, setForm] = useState<ProviderFormState>(() => buildEmptyForm());
   const [baseline, setBaseline] = useState(() => buildCodexBaseline(buildEmptyForm()));
 
+  const [testOpen, setTestOpen] = useState(false);
   const [modelDiscoveryOpen, setModelDiscoveryOpen] = useState(false);
   const [modelDiscoveryEndpoint, setModelDiscoveryEndpoint] = useState('');
   const [discoveredModels, setDiscoveredModels] = useState<ModelInfo[]>([]);
@@ -636,6 +639,14 @@ export function AiProvidersCodexEditPage() {
                   >
                     {t('ai_providers.codex_models_fetch_button')}
                   </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setTestOpen(true)}
+                    disabled={disableControls || saving}
+                  >
+                    {t('ai_providers.provider_test_title')}
+                  </Button>
                 </div>
               </div>
               <div className={styles.sectionHint}>{t('ai_providers.codex_models_hint')}</div>
@@ -811,6 +822,19 @@ export function AiProvidersCodexEditPage() {
                 )}
               </div>
             </Modal>
+
+            <ProviderTestModal
+              open={testOpen}
+              onClose={() => setTestOpen(false)}
+              {...draftTestPreset('codex', 'CODEX', {
+                label: form.prefix || form.baseUrl || t('ai_providers.codex_title'),
+                baseUrl: form.baseUrl,
+                apiKey: form.apiKey.trim(),
+                authIndex: normalizeAuthIndex(form.authIndex) ?? undefined,
+                headers: buildHeaderObject(form.headers),
+                modelNames: form.modelEntries.map((e) => e.name.trim()).filter(Boolean),
+              })}
+            />
           </>
         )}
       </Card>

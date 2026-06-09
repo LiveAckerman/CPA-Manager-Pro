@@ -20,6 +20,14 @@ import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { ampcodeApi, providersApi } from '@/services/api';
 import { useAuthStore, useConfigStore, useNotificationStore, useThemeStore } from '@/stores';
 import type { GeminiKeyConfig, OpenAIProviderConfig, ProviderKeyConfig } from '@/types';
+import { ProviderTestModal } from './ProviderTestModal';
+import {
+  ampcodeTestPreset,
+  geminiTestPreset,
+  openaiTestPreset,
+  providerKeyTestPreset,
+  type ProviderTestPreset,
+} from './providerTestPresets';
 import styles from './AiProvidersPage.module.scss';
 
 export function AiProvidersPage() {
@@ -56,6 +64,14 @@ export function AiProvidersPage() {
   );
 
   const [configSwitchingKey, setConfigSwitchingKey] = useState<string | null>(null);
+
+  const [testOpen, setTestOpen] = useState(false);
+  const [testPreset, setTestPreset] = useState<ProviderTestPreset | null>(null);
+  const openTest = useCallback((preset: ProviderTestPreset | null) => {
+    if (!preset) return;
+    setTestPreset(preset);
+    setTestOpen(true);
+  }, []);
 
   const disableControls = connectionStatus !== 'connected';
   const isSwitching = Boolean(configSwitchingKey);
@@ -421,6 +437,9 @@ export function AiProvidersPage() {
             onEdit={(index) => openEditor(`/ai-providers/gemini/${index}`)}
             onDelete={deleteGemini}
             onToggle={(index, enabled) => void setConfigEnabled('gemini', index, enabled)}
+            onTest={(index) =>
+              openTest(geminiKeys[index] ? geminiTestPreset(geminiKeys[index], index) : null)
+            }
           />
         </div>
 
@@ -435,6 +454,13 @@ export function AiProvidersPage() {
             onEdit={(index) => openEditor(`/ai-providers/codex/${index}`)}
             onDelete={(index) => void deleteProviderEntry('codex', index)}
             onToggle={(index, enabled) => void setConfigEnabled('codex', index, enabled)}
+            onTest={(index) =>
+              openTest(
+                codexConfigs[index]
+                  ? providerKeyTestPreset('codex', 'CODEX', codexConfigs[index], index)
+                  : null
+              )
+            }
           />
         </div>
 
@@ -449,6 +475,13 @@ export function AiProvidersPage() {
             onEdit={(index) => openEditor(`/ai-providers/claude/${index}`)}
             onDelete={(index) => void deleteProviderEntry('claude', index)}
             onToggle={(index, enabled) => void setConfigEnabled('claude', index, enabled)}
+            onTest={(index) =>
+              openTest(
+                claudeConfigs[index]
+                  ? providerKeyTestPreset('claude', 'CLAUDE', claudeConfigs[index], index)
+                  : null
+              )
+            }
           />
         </div>
 
@@ -463,6 +496,13 @@ export function AiProvidersPage() {
             onEdit={(index) => openEditor(`/ai-providers/vertex/${index}`)}
             onDelete={deleteVertex}
             onToggle={(index, enabled) => void setConfigEnabled('vertex', index, enabled)}
+            onTest={(index) =>
+              openTest(
+                vertexConfigs[index]
+                  ? providerKeyTestPreset('vertex', 'VERTEX', vertexConfigs[index], index)
+                  : null
+              )
+            }
           />
         </div>
 
@@ -473,6 +513,7 @@ export function AiProvidersPage() {
             disableControls={disableControls}
             isSwitching={isSwitching}
             onEdit={() => openEditor('/ai-providers/ampcode')}
+            onTest={() => openTest(config?.ampcode ? ampcodeTestPreset(config.ampcode) : null)}
           />
         </div>
 
@@ -488,9 +529,16 @@ export function AiProvidersPage() {
             onEdit={(index) => openEditor(`/ai-providers/openai/${index}`)}
             onDelete={deleteOpenai}
             onToggle={(index, enabled) => void setOpenAIProviderEnabled(index, enabled)}
+            onTest={(index) =>
+              openTest(openaiProviders[index] ? openaiTestPreset(openaiProviders[index]) : null)
+            }
           />
         </div>
       </div>
+
+      {testPreset && (
+        <ProviderTestModal open={testOpen} onClose={() => setTestOpen(false)} {...testPreset} />
+      )}
 
       <ProviderNav />
     </div>

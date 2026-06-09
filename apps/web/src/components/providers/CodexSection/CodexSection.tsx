@@ -43,6 +43,7 @@ interface CodexSectionProps {
   onEdit: (index: number) => void;
   onDelete: (index: number) => void;
   onToggle: (index: number, enabled: boolean) => void;
+  onTest?: (index: number) => void;
 }
 
 export function CodexSection({
@@ -55,6 +56,7 @@ export function CodexSection({
   onEdit,
   onDelete,
   onToggle,
+  onTest,
 }: CodexSectionProps) {
   const { t } = useTranslation();
   const actionsDisabled = disableControls || loading || isSwitching;
@@ -362,12 +364,24 @@ export function CodexSection({
             actionsDisabled={actionsDisabled}
             getRowDisabled={(item) => hasDisableAllModelsRule(item.config.excludedModels)}
             renderExtraActions={(item) => (
-              <ToggleSwitch
-                label={t('ai_providers.config_toggle_label')}
-                checked={!hasDisableAllModelsRule(item.config.excludedModels)}
-                disabled={toggleDisabled}
-                onChange={(value) => void onToggle(item.originalIndex, value)}
-              />
+              <>
+                {onTest && (
+                  <Button
+                    variant="secondary"
+                    size="xs"
+                    disabled={actionsDisabled}
+                    onClick={() => onTest(item.originalIndex)}
+                  >
+                    {t('ai_providers.provider_test_action')}
+                  </Button>
+                )}
+                <ToggleSwitch
+                  label={t('ai_providers.config_toggle_label')}
+                  checked={!hasDisableAllModelsRule(item.config.excludedModels)}
+                  disabled={toggleDisabled}
+                  onChange={(value) => void onToggle(item.originalIndex, value)}
+                />
+              </>
             )}
             renderContent={({ config: item, originalIndex }) => {
               const stats = getProviderTotalStats(

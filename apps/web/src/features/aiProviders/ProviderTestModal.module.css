@@ -1,0 +1,121 @@
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.providerCard {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.25));
+  border-radius: 12px;
+  background: var(--surface-muted, rgba(148, 163, 184, 0.08));
+}
+
+.providerName {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--text-primary, inherit);
+}
+
+.badge {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--surface-strong, rgba(148, 163, 184, 0.18));
+  color: var(--text-secondary, #64748b);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary, #475569);
+}
+
+.modelInput {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.3));
+  border-radius: 10px;
+  background: var(--surface, transparent);
+  color: var(--text-primary, inherit);
+  font-size: 14px;
+}
+
+.modelInput:focus {
+  outline: none;
+  border-color: var(--accent, #10b981);
+}
+
+.output {
+  min-height: 150px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: #0b1220;
+  border: 1px solid #1e293b;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.placeholder {
+  color: #64748b;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.line {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #cbd5e1;
+}
+
+.line_req {
+  color: #93c5fd;
+}
+
+.line_ok {
+  color: #4ade80;
+  font-weight: 600;
+}
+
+.line_err {
+  color: #f87171;
+  font-weight: 600;
+}
+
+.line_info {
+  color: #94a3b8;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--text-secondary, #64748b);
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  width: 100%;
+}
