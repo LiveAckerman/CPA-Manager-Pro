@@ -63,6 +63,10 @@ type Config struct {
 	CPAImageAPIKey          string
 }
 
+type LoadOptions struct {
+	CreateDefaultConfig bool
+}
+
 type fileConfig struct {
 	HTTPAddr          string   `json:"httpAddr,omitempty"`
 	DataDir           string   `json:"dataDir,omitempty"`
@@ -84,7 +88,15 @@ type fileConfig struct {
 }
 
 func Load() (Config, error) {
-	cfgFile, cfgDir, err := loadFileConfig()
+	return LoadWithOptions(LoadOptions{CreateDefaultConfig: true})
+}
+
+func LoadWithoutCreatingDefault() (Config, error) {
+	return LoadWithOptions(LoadOptions{})
+}
+
+func LoadWithOptions(options LoadOptions) (Config, error) {
+	cfgFile, cfgDir, err := loadFileConfig(options)
 	if err != nil {
 		return Config{}, err
 	}
@@ -147,8 +159,15 @@ func Load() (Config, error) {
 	}, nil
 }
 
-func loadFileConfig() (fileConfig, string, error) {
+func loadFileConfig(options LoadOptions) (fileConfig, string, error) {
 	if configPath := strings.TrimSpace(os.Getenv(configEnvKey)); configPath != "" {
+		if !options.CreateDefaultConfig {
+			cfg, cfgDir, ok, err := readFileConfig(configPath)
+			if err != nil || ok {
+				return cfg, cfgDir, err
+			}
+			return fileConfig{}, filepath.Dir(configPath), nil
+		}
 		return readOrCreateFileConfig(configPath)
 	}
 
@@ -162,6 +181,9 @@ func loadFileConfig() (fileConfig, string, error) {
 	}
 	if hasEnv("USAGE_DATA_DIR") || hasEnv("USAGE_DB_PATH") {
 		return fileConfig{}, "", nil
+	}
+	if !options.CreateDefaultConfig {
+		return fileConfig{}, filepath.Dir(configPath), nil
 	}
 	return createDefaultFileConfig(configPath)
 }

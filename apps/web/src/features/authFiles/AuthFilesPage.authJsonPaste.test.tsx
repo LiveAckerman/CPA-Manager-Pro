@@ -11,19 +11,18 @@ const { mocks } = vi.hoisted(() => {
       savePastedAuthJson: vi.fn(async () => 'saved.json'),
       showNotification: vi.fn(),
       navigate: vi.fn(),
-      lastModalProps: null as
-        | {
-            open: boolean;
-            saving: boolean;
-            onClose: () => void;
-            onSave: (type: 'session' | 'cpa', fileName: string, jsonText: string) => Promise<void>;
-          }
-        | null,
+      lastModalProps: null as {
+        open: boolean;
+        saving: boolean;
+        onClose: () => void;
+        onSave: (type: 'session' | 'cpa', fileName: string, jsonText: string) => Promise<void>;
+      } | null,
     },
   };
 });
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: () => {} },
   useTranslation: () => ({
     t: (key: string) => key,
   }),
@@ -66,6 +65,7 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
     deletingAll: false,
     statusUpdating: false,
     batchStatusUpdating: false,
+    batchFieldsUpdating: false,
     fileInputRef: { current: null },
     loadFiles: vi.fn(async () => undefined),
     handleUploadClick: vi.fn(),
@@ -81,6 +81,7 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
     deselectAll: vi.fn(),
     batchDownload: vi.fn(),
     batchSetStatus: vi.fn(),
+    batchPatchFields: vi.fn(),
     batchDelete: vi.fn(),
   }),
 }));
@@ -144,13 +145,15 @@ vi.mock('@/features/authFiles/uiState', () => ({
 }));
 
 vi.mock('@/stores', () => ({
-  useNotificationStore: (selector: (state: { showNotification: typeof mocks.showNotification }) => unknown) =>
-    selector({ showNotification: mocks.showNotification }),
+  useNotificationStore: (
+    selector: (state: { showNotification: typeof mocks.showNotification }) => unknown
+  ) => selector({ showNotification: mocks.showNotification }),
   useAuthStore: (selector: (state: { connectionStatus: 'connected' }) => unknown) =>
     selector({ connectionStatus: 'connected' }),
   useThemeStore: (selector: (state: { resolvedTheme: 'dark' }) => unknown) =>
     selector({ resolvedTheme: 'dark' }),
-  useQuotaStore: (selector: (state: { codexQuota: null }) => unknown) => selector({ codexQuota: null }),
+  useQuotaStore: (selector: (state: { codexQuota: null }) => unknown) =>
+    selector({ codexQuota: null }),
 }));
 
 vi.mock('@/features/authFiles/components/AuthFileCard', () => ({
@@ -235,7 +238,11 @@ describe('AuthFilesPage auth JSON paste flow', () => {
       renderer!.root.findByProps({ id: 'modal-save-trigger' }).props.onClick();
     });
 
-    expect(mocks.savePastedAuthJson).toHaveBeenCalledWith('cpa', 'custom-auth.json', '{"type":"codex"}');
+    expect(mocks.savePastedAuthJson).toHaveBeenCalledWith(
+      'cpa',
+      'custom-auth.json',
+      '{"type":"codex"}'
+    );
     expect(mocks.lastModalProps?.open).toBe(false);
 
     renderer!.unmount();
@@ -279,9 +286,9 @@ describe('AuthFilesPage auth JSON paste flow', () => {
     expect(mocks.lastModalProps?.open).toBe(true);
 
     mocks.savePastedAuthJson.mockRejectedValueOnce(new Error('reload failed'));
-    await expect(mocks.lastModalProps!.onSave('cpa', 'custom-auth.json', '{"type":"codex"}')).rejects.toThrow(
-      'reload failed'
-    );
+    await expect(
+      mocks.lastModalProps!.onSave('cpa', 'custom-auth.json', '{"type":"codex"}')
+    ).rejects.toThrow('reload failed');
 
     expect(mocks.lastModalProps?.open).toBe(true);
     renderer!.unmount();

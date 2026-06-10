@@ -131,25 +131,7 @@ Backups must include both SQLite files and `data.key`. Do not upload `data.key` 
 
 ## Lost Admin Key Recovery
 
-The current version has no online admin-key reset endpoint. Once `settings.admin_credential_v1` exists, setting `CPA_MANAGER_ADMIN_KEY` again does not overwrite it.
-
-Offline recovery:
-
-1. Stop Manager Server.
-2. Back up the full `/data`.
-3. Delete the admin credential row:
-
-```bash
-sqlite3 /path/to/usage.sqlite "delete from settings where key = 'admin_credential_v1';"
-```
-
-4. Start with a new admin key:
-
-```bash
-CPA_MANAGER_ADMIN_KEY='replace-with-a-long-random-admin-key' ./cpa-manager-plus
-```
-
-For Docker, use a temporary sqlite container or a host sqlite tool against the mounted directory. Do not delete `manager_config_v1`, `setup`, or `data.key`.
+Admin-key reset instructions are maintained separately. Stop Manager Server, back up `/data`, and follow [Reset the Manager Server Admin Key](reset-admin-key.md).
 
 ## Rollback
 

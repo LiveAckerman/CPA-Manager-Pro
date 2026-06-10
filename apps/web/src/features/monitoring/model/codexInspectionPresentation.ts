@@ -60,6 +60,15 @@ export type SummaryCard = {
   accent?: CodexInspectionSummaryAccent;
 };
 
+export type CodexInspectionPaginationState<T> = {
+  currentPage: number;
+  totalPages: number;
+  pageItems: T[];
+  startItem: number;
+  endItem: number;
+  count: number;
+};
+
 export type InspectionSettingsDraft = {
   targetType: string;
   workers: string;
@@ -85,6 +94,8 @@ export const ACTION_FILTERS: ActionFilter[] = [
   'reauth',
   'http_401',
 ];
+
+export const CODEX_INSPECTION_RESULT_PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 
 export const formatTimestamp = (value: number, locale: string) =>
   new Date(value).toLocaleString(locale);
@@ -289,6 +300,27 @@ export const filterByAction = (items: CodexInspectionResultItem[], filter: Actio
   if (filter === 'all') return items;
   if (filter === 'http_401') return items.filter((item) => item.statusCode === 401);
   return items.filter((item) => item.action === filter);
+};
+
+export const buildCodexInspectionPaginationState = <T>(
+  items: readonly T[],
+  page: number,
+  pageSize: number
+): CodexInspectionPaginationState<T> => {
+  const safePageSize = Math.max(1, pageSize);
+  const totalPages = Math.max(1, Math.ceil(items.length / safePageSize));
+  const currentPage = Math.min(Math.max(1, Number.isFinite(page) ? page : 1), totalPages);
+  const startIndex = (currentPage - 1) * safePageSize;
+  const endIndex = Math.min(startIndex + safePageSize, items.length);
+
+  return {
+    currentPage,
+    totalPages,
+    pageItems: items.slice(startIndex, endIndex),
+    startItem: items.length > 0 ? startIndex + 1 : 0,
+    endItem: endIndex,
+    count: items.length,
+  };
 };
 
 export const isCodexInspectionAutoExecutionEnabled = (

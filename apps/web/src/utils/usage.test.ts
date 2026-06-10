@@ -7,9 +7,23 @@ import {
   collectUsageDetailsWithEndpoint,
   compatibleCachedTokens,
   extractTotalTokens,
+  formatCompactNumber,
+  getServiceTierMultiplier,
   normalizeUsageSourceId,
 } from './usage';
 import { maskSensitiveText } from './format';
+
+describe('formatCompactNumber', () => {
+  it('keeps large values compact as data grows beyond millions', () => {
+    expect(formatCompactNumber(999)).toBe('999');
+    expect(formatCompactNumber(1_200)).toBe('1.2K');
+    expect(formatCompactNumber(999_950)).toBe('1.0M');
+    expect(formatCompactNumber(2_795_200_000)).toBe('2.8B');
+    expect(formatCompactNumber(1_200_000_000_000)).toBe('1.2T');
+    expect(formatCompactNumber(-2_500_000_000_000_000)).toBe('-2.5P');
+    expect(formatCompactNumber(Number.POSITIVE_INFINITY)).toBe('0');
+  });
+});
 
 describe('usage source candidates', () => {
   it('includes the masked source emitted by CPA for raw upstream keys', () => {
@@ -233,6 +247,41 @@ describe('usage detail collection', () => {
     expect(detail.tokens.cached_tokens).toBe(0);
     expect(detail.tokens.cache_read_tokens).toBe(500);
   });
+
+  it('normalizes Anthropic cache input token fields', () => {
+    const usageData = {
+      apis: {
+        'POST /v1/messages': {
+          models: {
+            'claude-sonnet': {
+              details: [
+                {
+                  timestamp: '2026-05-19T10:00:00Z',
+                  source: 'alice@example.com',
+                  auth_index: 'auth-1',
+                  tokens: {
+                    input_tokens: 100,
+                    output_tokens: 20,
+                    cached_tokens: 34,
+                    cache_creation_input_tokens: 11,
+                    cache_read_input_tokens: 23,
+                  },
+                  failed: false,
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+
+    const detail = collectUsageDetailsWithEndpoint(usageData)[0];
+
+    expect(detail.tokens.cached_tokens).toBe(0);
+    expect(detail.tokens.cache_creation_tokens).toBe(11);
+    expect(detail.tokens.cache_read_tokens).toBe(23);
+    expect(detail.tokens.total_tokens).toBe(154);
+  });
 });
 
 describe('usage token helpers', () => {
@@ -255,6 +304,20 @@ describe('usage token helpers', () => {
         },
       })
     ).toBe(43);
+  });
+
+  it('uses Anthropic cache input fields when total tokens are missing', () => {
+    expect(
+      extractTotalTokens({
+        tokens: {
+          input_tokens: 100,
+          output_tokens: 20,
+          cached_tokens: 34,
+          cache_read_input_tokens: 23,
+          cache_creation_input_tokens: 11,
+        },
+      })
+    ).toBe(154);
   });
 });
 
@@ -313,6 +376,20 @@ describe('calculateCost model price preference', () => {
     expect(cost).toBeCloseTo(50);
   });
 
+  it('applies the tier multiplier to the requested price fallback', () => {
+    const cost = calculateCost(
+      {
+        tokens: { input_tokens: 1_000_000, output_tokens: 0 },
+        __modelName: 'gpt-5.4',
+        __resolvedModel: 'unknown-upstream',
+        service_tier: 'priority',
+      },
+      prices
+    );
+
+    expect(cost).toBeCloseTo(100);
+  });
+
   it('charges cached input tokens only at the cache price', () => {
     const cost = calculateCost(
       {
@@ -353,5 +430,89 @@ describe('calculateCost model price preference', () => {
     );
 
     expect(cost).toBeCloseTo(2.3);
+  });
+
+  it('applies gpt-5.4 priority service tier multiplier', () => {
+    const cost = calculateCost(
+      {
+        tokens: { input_tokens: 1_000_000 },
+        __modelName: 'gpt-5.4',
+        service_tier: 'priority',
+      },
+      {
+        'gpt-5.4': { prompt: 2.5, completion: 5, cache: 1 },
+      }
+    );
+
+    expect(cost).toBeCloseTo(5);
+  });
+
+  it('applies gpt-5.5 priority service tier multiplier', () => {
+    const cost = calculateCost(
+      {
+        tokens: { input_tokens: 1_000_000 },
+        __modelName: 'gpt-5.5',
+        serviceTier: 'priority',
+      },
+      {
+        'gpt-5.5': { prompt: 2, completion: 4, cache: 1 },
+      }
+    );
+
+    expect(cost).toBeCloseTo(5);
+  });
+
+  it('keeps default and missing service tier at standard cost', () => {
+    const modelPrices = {
+      'gpt-5.4': { prompt: 2.5, completion: 5, cache: 1 },
+    };
+
+    expect(
+      calculateCost(
+        {
+          tokens: { input_tokens: 1_000_000 },
+          __modelName: 'gpt-5.4',
+          service_tier: 'default',
+        },
+        modelPrices
+      )
+    ).toBeCloseTo(2.5);
+    expect(
+      calculateCost(
+        {
+          tokens: { input_tokens: 1_000_000 },
+          __modelName: 'gpt-5.4',
+        },
+        modelPrices
+      )
+    ).toBeCloseTo(2.5);
+  });
+
+  it('does not guess priority multiplier for unknown models', () => {
+    const cost = calculateCost(
+      {
+        tokens: { input_tokens: 1_000_000 },
+        __modelName: 'unknown-model',
+        service_tier: 'priority',
+      },
+      {
+        'unknown-model': { prompt: 2.5, completion: 5, cache: 1 },
+      }
+    );
+
+    expect(cost).toBeCloseTo(2.5);
+  });
+});
+
+describe('getServiceTierMultiplier', () => {
+  it('matches backend priority tier rules', () => {
+    expect(getServiceTierMultiplier('gpt-5.4', 'default')).toBe(1);
+    expect(getServiceTierMultiplier('gpt-5.4', 'priority')).toBe(2);
+    expect(getServiceTierMultiplier('gpt-5.4', 'fast')).toBe(2);
+    expect(getServiceTierMultiplier('gpt-5.4-mini', 'priority')).toBe(2);
+    expect(getServiceTierMultiplier('gpt-5.5', 'priority')).toBe(2.5);
+    expect(getServiceTierMultiplier('gpt-5.3-codex', 'priority')).toBe(2);
+    expect(getServiceTierMultiplier('gpt-5.4', 'unknown')).toBe(1);
+    expect(getServiceTierMultiplier('unknown-model', 'priority')).toBe(1);
   });
 });

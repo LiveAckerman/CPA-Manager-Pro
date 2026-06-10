@@ -101,4 +101,43 @@ describe('inspectSingleAccount', () => {
     expect(result.usedPercent).toBe(5);
     expect(result.isQuota).toBe(false);
   });
+
+  it('deletes an account when the workspace is deactivated', async () => {
+    mockRequestCodexUsageRaw.mockResolvedValue({
+      result: {
+        statusCode: 402,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '{"detail":{"code":"deactivated_workspace"}}',
+        body: { detail: { code: 'deactivated_workspace' } },
+      },
+      payload: null,
+    });
+
+    const result = await inspectSingleAccount(baseAccount, settings);
+
+    expect(result.action).toBe('delete');
+    expect(result.actionReason).toBe('接口返回 402，工作区已停用，建议删除账号');
+    expect(result.usedPercent).toBe(null);
+    expect(result.isQuota).toBe(false);
+  });
+
+  it('keeps regular 402 quota responses as disable suggestions', async () => {
+    mockRequestCodexUsageRaw.mockResolvedValue({
+      result: {
+        statusCode: 402,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '{"message":"limit reached"}',
+        body: { message: 'limit reached' },
+      },
+      payload: null,
+    });
+
+    const result = await inspectSingleAccount(baseAccount, settings);
+
+    expect(result.action).toBe('disable');
+    expect(result.actionReason).toBe('额度已耗尽，建议禁用账号');
+    expect(result.isQuota).toBe(true);
+  });
 });

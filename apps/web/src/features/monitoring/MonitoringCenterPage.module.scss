@@ -937,6 +937,12 @@
   color: var(--monitor-accent-strong);
 }
 
+.accountDisplayModeButtonActive {
+  border-color: color-mix(in srgb, var(--monitor-accent) 42%, var(--monitor-line-strong));
+  background: color-mix(in srgb, var(--monitor-accent) 10%, var(--monitor-surface-elevated));
+  color: var(--monitor-accent-strong);
+}
+
 .accountOverviewFilterCount {
   display: inline-flex;
   align-items: center;
@@ -1129,7 +1135,7 @@
   max-width: 100%;
 }
 
-.inlineMetrics span {
+.inlineMetrics > span {
   display: inline-flex;
   align-items: center;
   min-height: 30px;
@@ -1225,10 +1231,26 @@
 
 @include summaryTable.styles;
 @include accountOverview.styles;
+.realtimeTable .logTypeCell .primaryCell > span {
+  display: inline-block;
+  max-width: min(240px, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .realtimeTable .primaryCell small {
   white-space: normal;
   word-break: break-word;
   line-height: 1.45;
+}
+
+.realtimeApiKeyLine {
+  display: block;
+  max-width: 100%;
+  color: var(--monitor-muted);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .realtimeMetricCell,
@@ -1526,9 +1548,12 @@
   }
 
   .summaryHero,
-  .summarySub,
-  .summaryGrid {
+  .summarySub {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .summaryGrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .accountOverviewCardGrid {
@@ -1681,8 +1706,8 @@
   .summaryCard,
   .summaryCardPrimary,
   .summaryCardSecondary {
-    height: 128px;
-    min-height: 128px;
+    height: auto;
+    min-height: 112px;
     border-radius: var(--app-radius-md);
   }
 
@@ -1788,11 +1813,11 @@
   }
 
   .summaryValue {
-    font-size: 26px;
+    font-size: 22px;
   }
 
   .summaryCardSecondary .summaryValue {
-    font-size: 26px;
+    font-size: 22px;
   }
 
   .priceActionsBar {
@@ -1835,7 +1860,6 @@
     grid-template-columns: 1fr;
   }
 
-  .accountEnabledControl,
   .accountMetaRow .inlineActionButton {
     justify-self: start;
     margin-left: 0;
@@ -1867,11 +1891,6 @@
     justify-items: start;
   }
 
-  .accountOverviewToggleRow {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
   .monitoringStatusBar {
     width: 100%;
     align-items: center;
@@ -1883,7 +1902,6 @@
     flex: 1 1 auto;
   }
 
-  .accountOverviewToggleActions,
   .accountMetaRow {
     width: 100%;
   }
@@ -2003,4 +2021,18 @@
   .customRangeModalGrid {
     grid-template-columns: 1fr;
   }
+}
+
+.loadMoreEventsBar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 0 4px;
+}
+
+.loadMoreEventsSummary {
+  color: var(--color-text-muted, #6b7280);
+  font-size: 13px;
 }

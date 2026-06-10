@@ -33,6 +33,7 @@ import {
   type ResolvedTheme,
 } from '@/features/authFiles/constants';
 import type { AuthFileStatusBarData } from '@/features/authFiles/hooks/useAuthFilesStatusBarCache';
+import type { AuthFileCodexStatusBadge } from '@/features/authFiles/model/authFilesPageModel';
 import { AuthFileQuotaSection } from '@/features/authFiles/components/AuthFileQuotaSection';
 import styles from '@/features/authFiles/AuthFilesPage.module.scss';
 
@@ -47,6 +48,7 @@ export type AuthFileCardProps = {
   deleting: string | null;
   statusUpdating: Record<string, boolean>;
   statusBarCache: Map<string, AuthFileStatusBarData>;
+  codexStatusBadges?: AuthFileCodexStatusBadge[];
   onShowModels: (file: AuthFileItem) => void;
   onDownload: (name: string) => void;
   onOpenPrefixProxyEditor: (file: AuthFileItem) => void;
@@ -63,10 +65,7 @@ const resolveQuotaType = (file: AuthFileItem): QuotaProviderType | null => {
 
 const getProjectIdValue = (file: AuthFileItem): string => {
   const raw =
-    file.project_id ??
-    file.projectId ??
-    file.gemini_virtual_project ??
-    file.geminiVirtualProject;
+    file.project_id ?? file.projectId ?? file.gemini_virtual_project ?? file.geminiVirtualProject;
   return typeof raw === 'string' ? raw.trim() : '';
 };
 
@@ -81,6 +80,7 @@ export function AuthFileCard(props: AuthFileCardProps) {
     deleting,
     statusUpdating,
     statusBarCache,
+    codexStatusBadges = [],
     onShowModels,
     onDownload,
     onOpenPrefixProxyEditor,
@@ -145,6 +145,11 @@ export function AuthFileCard(props: AuthFileCardProps) {
       : hasStatusWarning
         ? styles.stateBadgeWarning
         : styles.stateBadgeActive;
+  const codexStatusBadgeClassByTone = {
+    danger: styles.codexStatusBadgeDanger,
+    warning: styles.codexStatusBadgeWarning,
+    info: styles.codexStatusBadgeInfo,
+  } satisfies Record<AuthFileCodexStatusBadge['tone'], string>;
 
   return (
     <div
@@ -177,6 +182,28 @@ export function AuthFileCard(props: AuthFileCardProps) {
                   {typeLabel}
                 </span>
                 <span className={`${styles.stateBadge} ${stateBadgeClass}`}>{stateLabel}</span>
+                {codexStatusBadges.map((badge) => {
+                  const label = t(badge.labelKey, {
+                    defaultValue: badge.defaultLabel,
+                    ...badge.labelParams,
+                  });
+                  const title = badge.titleKey
+                    ? t(badge.titleKey, {
+                        defaultValue: badge.defaultTitle ?? badge.defaultLabel,
+                        ...badge.labelParams,
+                      })
+                    : (badge.defaultTitle ?? label);
+
+                  return (
+                    <span
+                      key={badge.kind}
+                      className={`${styles.codexStatusBadge} ${codexStatusBadgeClassByTone[badge.tone]}`}
+                      title={title}
+                    >
+                      {label}
+                    </span>
+                  );
+                })}
               </div>
               <span className={styles.fileName} title={file.name}>
                 {file.name}

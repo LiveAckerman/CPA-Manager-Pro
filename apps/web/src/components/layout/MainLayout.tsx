@@ -160,6 +160,7 @@ const THEME_OPTIONS: Array<{
 type NavItem = {
   path: string;
   label: string;
+  shortLabel?: string;
   icon: ReactNode;
   exact?: boolean;
 };
@@ -350,42 +351,91 @@ export function MainLayout() {
   }, [fetchConfig]);
 
   const fileLogsAvailable = isFileLogsAvailable(config);
+  const navShortLabel = (key: string, fallback: string) => {
+    const shortKey = `${key}_short`;
+    const label = t(shortKey, { defaultValue: fallback });
+    return label === shortKey ? fallback : label;
+  };
   const operationNavItems: NavItem[] = [
     ...(featureAvailability.requestMonitoringAvailable
       ? [
           {
             path: '/monitoring',
             label: t('nav.monitoring_center'),
+            shortLabel: navShortLabel('nav.monitoring_center', t('nav.monitoring_center')),
             icon: sidebarIcons.monitoring,
           },
         ]
       : []),
     ...(fileLogsAvailable
-      ? [{ path: '/logs', label: t('nav.logs'), icon: sidebarIcons.logs }]
+      ? [
+          {
+            path: '/logs',
+            label: t('nav.logs'),
+            shortLabel: navShortLabel('nav.logs', t('nav.logs')),
+            icon: sidebarIcons.logs,
+          },
+        ]
       : []),
   ];
   const navSections: NavItem[][] = [
-    [{ path: '/', label: t('nav.dashboard'), icon: sidebarIcons.dashboard }],
     [
-      { path: '/config', label: t('nav.config_management'), icon: sidebarIcons.config },
-      { path: '/ai-providers', label: t('nav.ai_providers'), icon: sidebarIcons.aiProviders },
+      {
+        path: '/',
+        label: t('nav.dashboard'),
+        shortLabel: navShortLabel('nav.dashboard', t('nav.dashboard')),
+        icon: sidebarIcons.dashboard,
+      },
     ],
     [
-      { path: '/auth-files', label: t('nav.auth_files'), icon: sidebarIcons.authFiles },
+      {
+        path: '/config',
+        label: t('nav.config_management'),
+        shortLabel: navShortLabel('nav.config_management', t('nav.config_management')),
+        icon: sidebarIcons.config,
+      },
+      {
+        path: '/ai-providers',
+        label: t('nav.ai_providers'),
+        shortLabel: navShortLabel('nav.ai_providers', t('nav.ai_providers')),
+        icon: sidebarIcons.aiProviders,
+      },
+    ],
+    [
+      {
+        path: '/auth-files',
+        label: t('nav.auth_files'),
+        shortLabel: navShortLabel('nav.auth_files', t('nav.auth_files')),
+        icon: sidebarIcons.authFiles,
+      },
       {
         path: '/oauth',
         label: t('nav.oauth', { defaultValue: 'OAuth' }),
+        shortLabel: navShortLabel('nav.oauth', t('nav.oauth', { defaultValue: 'OAuth' })),
         icon: sidebarIcons.oauth,
       },
-      { path: '/quota', label: t('nav.quota_management'), icon: sidebarIcons.quota },
+      {
+        path: '/quota',
+        label: t('nav.quota_management'),
+        shortLabel: navShortLabel('nav.quota_management', t('nav.quota_management')),
+        icon: sidebarIcons.quota,
+      },
       {
         path: '/codex-inspection',
         label: t('nav.codex_inspection'),
+        shortLabel: navShortLabel('nav.codex_inspection', t('nav.codex_inspection')),
         icon: sidebarIcons.codexInspection,
       },
     ],
     operationNavItems,
-    [{ path: '/system', label: t('nav.system_info'), icon: sidebarIcons.system }],
+    [
+      {
+        path: '/system',
+        label: t('nav.system_info'),
+        shortLabel: navShortLabel('nav.system_info', t('nav.system_info')),
+        icon: sidebarIcons.system,
+      },
+    ],
   ].filter((section) => section.length > 0);
   const navItems = navSections.flat();
   const navOrder = navItems.map((item) => item.path);
@@ -661,10 +711,12 @@ export function MainLayout() {
                       }`
                     }
                     onClick={() => setSidebarOpen(false)}
-                    title={showSidebarLabels ? undefined : item.label}
+                    title={item.label}
                   >
                     <span className="nav-icon">{item.icon}</span>
-                    {showSidebarLabels && <span className="nav-label">{item.label}</span>}
+                    {showSidebarLabels && (
+                      <span className="nav-label">{item.shortLabel ?? item.label}</span>
+                    )}
                   </NavLink>
                 ))}
               </div>

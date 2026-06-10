@@ -34,6 +34,24 @@ func TestLoadCreatesDefaultConfig(t *testing.T) {
 	}
 }
 
+func TestLoadWithoutCreatingDefaultDoesNotCreateConfig(t *testing.T) {
+	clearConfigEnv(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	t.Setenv(configEnvKey, configPath)
+
+	cfg, err := LoadWithoutCreatingDefault()
+	if err != nil {
+		t.Fatalf("LoadWithoutCreatingDefault() error = %v", err)
+	}
+	if want := filepath.Join(dir, "data", "usage.sqlite"); cfg.DBPath != want {
+		t.Fatalf("DBPath = %q, want %q", cfg.DBPath, want)
+	}
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("config file exists or stat failed: %v", err)
+	}
+}
+
 func TestLoadReadsConfigAndResolvesRelativePaths(t *testing.T) {
 	clearConfigEnv(t)
 	dir := t.TempDir()

@@ -2,6 +2,7 @@ package monitoring
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"path/filepath"
 	"testing"
@@ -293,6 +294,93 @@ func TestAnalyticsUsesResolvedModelPricingInAggregates(t *testing.T) {
 	}
 }
 
+func TestAnalyticsPricesPriorityAndDefaultServiceTiersSeparately(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_010_000_000)
+	toMS := fromMS + 60*60*1000
+
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"gpt-5.4": {Prompt: 2.5},
+	}); err != nil {
+		t.Fatalf("save model prices: %v", err)
+	}
+
+	latency100 := int64(100)
+	latency200 := int64(200)
+	latency1000 := int64(1000)
+	standard := monitoringEvent("tier-default", fromMS+1_000, "gpt-5.4", "auth-1", "source-a", false, 1_000_000, 0, 0, 0, 1_000_000, &latency100)
+	standard.ServiceTier = "default"
+	standard.AccountSnapshot = "team@example.com"
+	standard.AuthLabelSnapshot = "Team"
+	standard.APIKeyHash = "client-key"
+	standardSecond := monitoringEvent("tier-default-second", fromMS+1_500, "gpt-5.4", "auth-1", "source-a", false, 0, 0, 0, 0, 0, &latency200)
+	standardSecond.ServiceTier = "default"
+	standardSecond.AccountSnapshot = "team@example.com"
+	standardSecond.AuthLabelSnapshot = "Team"
+	standardSecond.APIKeyHash = "client-key"
+	priority := monitoringEvent("tier-priority", fromMS+2_000, "gpt-5.4", "auth-1", "source-a", false, 1_000_000, 0, 0, 0, 1_000_000, &latency1000)
+	priority.ServiceTier = "priority"
+	priority.AccountSnapshot = "team@example.com"
+	priority.AuthLabelSnapshot = "Team"
+	priority.APIKeyHash = "client-key"
+	if _, err := db.InsertEvents(ctx, []usage.Event{standard, standardSecond, priority}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Include: Include{
+			Summary:      true,
+			ModelShare:   true,
+			ModelStats:   true,
+			ChannelShare: true,
+			AccountStats: true,
+			APIKeyStats:  true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+
+	assertCost := func(name string, got float64) {
+		t.Helper()
+		if math.Abs(got-7.5) > 0.000001 {
+			t.Fatalf("%s cost = %v, want 7.5", name, got)
+		}
+	}
+	if resp.Summary == nil {
+		t.Fatal("summary is nil")
+	}
+	assertCost("summary", resp.Summary.TotalCost)
+	if len(resp.ModelStats) != 1 || resp.ModelStats[0].Calls != 3 {
+		t.Fatalf("model stats = %#v", resp.ModelStats)
+	}
+	assertCost("model stats", resp.ModelStats[0].Cost)
+	if len(resp.ModelShare) != 1 {
+		t.Fatalf("model share = %#v", resp.ModelShare)
+	}
+	assertCost("model share", resp.ModelShare[0].Cost)
+	if len(resp.ChannelShare) != 1 {
+		t.Fatalf("channel share = %#v", resp.ChannelShare)
+	}
+	assertCost("channel share", resp.ChannelShare[0].Cost)
+	if resp.ChannelShare[0].AvgLatencyMS == nil || math.Abs(*resp.ChannelShare[0].AvgLatencyMS-(1300.0/3.0)) > 0.000001 {
+		t.Fatalf("channel latency = %#v, want weighted 433.333333", resp.ChannelShare[0].AvgLatencyMS)
+	}
+	if len(resp.AccountStats) != 1 || len(resp.AccountStats[0].Models) != 1 {
+		t.Fatalf("account stats = %#v", resp.AccountStats)
+	}
+	assertCost("account stats", resp.AccountStats[0].Cost)
+	assertCost("account model stats", resp.AccountStats[0].Models[0].Cost)
+	if len(resp.APIKeyStats) != 1 || len(resp.APIKeyStats[0].Models) != 1 {
+		t.Fatalf("api key stats = %#v", resp.APIKeyStats)
+	}
+	assertCost("api key stats", resp.APIKeyStats[0].Cost)
+	assertCost("api key model stats", resp.APIKeyStats[0].Models[0].Cost)
+}
+
 func TestAnalyticsAppliesFilters(t *testing.T) {
 	db := newMonitoringTestStore(t)
 	ctx := context.Background()
@@ -425,6 +513,45 @@ func TestAnalyticsSearchMatchesResolvedModelAndProjectID(t *testing.T) {
 			t.Fatalf("analytics search %q: %v", query, err)
 		}
 		if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != "search-new-fields" {
+			t.Fatalf("search %q events = %#v", query, resp.Events)
+		}
+	}
+}
+
+func TestAnalyticsSearchMatchesAccountSnapshotsWhenSourceIsMasked(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_060_000_000)
+	toMS := fromMS + 60*60*1000
+
+	alice := monitoringEvent("search-account-alice", fromMS+1_000, "gpt-a", "auth-a", "source-a", false, 1, 1, 0, 0, 2, nil)
+	alice.Source = "ali***@example.com"
+	alice.AccountSnapshot = "alice.smith@example.com"
+	alice.AuthLabelSnapshot = "Alice Work Account"
+	alice.AuthFileSnapshot = "alice.json"
+	bob := monitoringEvent("search-account-bob", fromMS+2_000, "gpt-b", "auth-b", "source-b", false, 1, 1, 0, 0, 2, nil)
+	bob.Source = "ali***@example.com"
+	bob.AccountSnapshot = "alina.team@example.com"
+	bob.AuthLabelSnapshot = "Alina Work Account"
+	bob.AuthFileSnapshot = "alina.json"
+	if _, err := db.InsertEvents(ctx, []usage.Event{alice, bob}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	for _, query := range []string{"ALICE.SMITH@example.com", "Alice Work Account", "alice.json"} {
+		resp, err := New(db).Analytics(ctx, Request{
+			FromMS:      fromMS,
+			ToMS:        toMS,
+			SearchQuery: query,
+			Include:     Include{Summary: true, EventsPage: &EventsPage{Limit: 10}},
+		})
+		if err != nil {
+			t.Fatalf("analytics search %q: %v", query, err)
+		}
+		if resp.Summary == nil || resp.Summary.TotalCalls != 1 {
+			t.Fatalf("search %q summary = %#v", query, resp.Summary)
+		}
+		if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != "search-account-alice" {
 			t.Fatalf("search %q events = %#v", query, resp.Events)
 		}
 	}
@@ -611,6 +738,175 @@ func TestAnalyticsFilterOptionsIgnoreActiveScopeFilters(t *testing.T) {
 	}
 	if len(resp.FilterOptions.ChannelShare) != 2 {
 		t.Fatalf("channel/provider filter options should ignore active account/model filters: %#v", resp.FilterOptions.ChannelShare)
+	}
+}
+
+func TestAnalyticsEventsPageReportsTotalCountWhilePaging(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_400_000_000)
+	toMS := fromMS + 60*60*1000
+
+	const total = 25
+	events := make([]usage.Event, 0, total)
+	for i := range total {
+		events = append(events, monitoringEvent(
+			fmt.Sprintf("total-%02d", i),
+			fromMS+int64(i+1)*1_000,
+			"gpt-a", "auth-1", "source-a", false, 1, 1, 0, 0, 2, nil,
+		))
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	// First page with summary enabled: total_count must reflect the full match
+	// count, not the page size.
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS:  fromMS,
+		ToMS:    toMS,
+		Include: Include{Summary: true, EventsPage: &EventsPage{Limit: 10}},
+	})
+	if err != nil {
+		t.Fatalf("analytics page 1: %v", err)
+	}
+	if resp.Events == nil || len(resp.Events.Items) != 10 || !resp.Events.HasMore {
+		t.Fatalf("page 1 = %#v", resp.Events)
+	}
+	if resp.Events.TotalCount != total {
+		t.Fatalf("page 1 total_count = %d, want %d", resp.Events.TotalCount, total)
+	}
+	if resp.Events.NextBeforeMS == 0 || resp.Events.NextBeforeID == 0 {
+		t.Fatalf("page 1 cursor = ms %d id %d", resp.Events.NextBeforeMS, resp.Events.NextBeforeID)
+	}
+
+	// Second page without summary exercises the standalone count(*) branch and
+	// must still report the full total, not the remaining count.
+	beforeMS := resp.Events.NextBeforeMS
+	beforeID := resp.Events.NextBeforeID
+	resp2, err := New(db).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Include: Include{
+			EventsPage: &EventsPage{Limit: 10, BeforeMS: &beforeMS, BeforeID: &beforeID},
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics page 2: %v", err)
+	}
+	if resp2.Events == nil || len(resp2.Events.Items) != 10 || !resp2.Events.HasMore {
+		t.Fatalf("page 2 = %#v", resp2.Events)
+	}
+	if resp2.Events.TotalCount != total {
+		t.Fatalf("page 2 total_count = %d, want %d", resp2.Events.TotalCount, total)
+	}
+	if resp2.Events.Items[0].EventHash == resp.Events.Items[len(resp.Events.Items)-1].EventHash {
+		t.Fatalf("page 2 overlaps page 1 boundary item")
+	}
+}
+
+func TestAnalyticsEventsPageTotalCountRespectsFilters(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_500_000_000)
+	toMS := fromMS + 60*60*1000
+
+	events := make([]usage.Event, 0, 11)
+	for i := range 8 {
+		events = append(events, monitoringEvent(fmt.Sprintf("ok-%d", i), fromMS+int64(i+1)*1_000, "gpt-a", "auth-1", "source-a", false, 1, 1, 0, 0, 2, nil))
+	}
+	for i := range 3 {
+		events = append(events, monitoringEvent(fmt.Sprintf("fail-%d", i), fromMS+int64(100+i)*1_000, "gpt-b", "auth-2", "source-b", true, 1, 1, 0, 0, 2, nil))
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	all, err := New(db).Analytics(ctx, Request{FromMS: fromMS, ToMS: toMS, Include: Include{EventsPage: &EventsPage{Limit: 50}}})
+	if err != nil {
+		t.Fatalf("analytics all: %v", err)
+	}
+	if all.Events == nil || all.Events.TotalCount != 11 {
+		t.Fatalf("all total_count = %#v", all.Events)
+	}
+
+	failed, err := New(db).Analytics(ctx, Request{FromMS: fromMS, ToMS: toMS, Filters: Filters{FailedOnly: true}, Include: Include{EventsPage: &EventsPage{Limit: 50}}})
+	if err != nil {
+		t.Fatalf("analytics failed only: %v", err)
+	}
+	if failed.Events == nil || failed.Events.TotalCount != 3 || len(failed.Events.Items) != 3 {
+		t.Fatalf("failed total_count = %#v", failed.Events)
+	}
+
+	byModel, err := New(db).Analytics(ctx, Request{FromMS: fromMS, ToMS: toMS, Filters: Filters{Models: []string{"gpt-a"}}, Include: Include{EventsPage: &EventsPage{Limit: 50}}})
+	if err != nil {
+		t.Fatalf("analytics model filter: %v", err)
+	}
+	if byModel.Events == nil || byModel.Events.TotalCount != 8 {
+		t.Fatalf("model total_count = %#v", byModel.Events)
+	}
+}
+
+func TestAnalyticsEventsPageStableCursorAvoidsSkippingSameTimestamp(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_600_000_000)
+	toMS := fromMS + 60*60*1000
+
+	// Every event shares one timestamp_ms so the page boundary lands inside a
+	// single millisecond. A timestamp-only cursor would skip the remaining
+	// rows; the compound (timestamp_ms, id) cursor must page through all of
+	// them without dropping or duplicating any.
+	const total = 12
+	sharedTS := fromMS + 5_000
+	events := make([]usage.Event, 0, total)
+	for i := range total {
+		events = append(events, monitoringEvent(fmt.Sprintf("same-ts-%02d", i), sharedTS, "gpt-a", "auth-1", "source-a", false, 1, 1, 0, 0, 2, nil))
+	}
+	if _, err := db.InsertEvents(ctx, events); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	svc := New(db)
+	seen := make(map[string]bool, total)
+	var beforeMS, beforeID int64
+	pages := 0
+	for {
+		page := &EventsPage{Limit: 5}
+		if beforeMS > 0 {
+			ms := beforeMS
+			id := beforeID
+			page.BeforeMS = &ms
+			page.BeforeID = &id
+		}
+		resp, err := svc.Analytics(ctx, Request{FromMS: fromMS, ToMS: toMS, Include: Include{EventsPage: page}})
+		if err != nil {
+			t.Fatalf("analytics page %d: %v", pages, err)
+		}
+		if resp.Events == nil {
+			t.Fatalf("analytics page %d returned no events", pages)
+		}
+		if resp.Events.TotalCount != total {
+			t.Fatalf("page %d total_count = %d, want %d", pages, resp.Events.TotalCount, total)
+		}
+		for _, item := range resp.Events.Items {
+			if seen[item.EventHash] {
+				t.Fatalf("duplicate event %s across pages", item.EventHash)
+			}
+			seen[item.EventHash] = true
+		}
+		pages++
+		if !resp.Events.HasMore {
+			break
+		}
+		beforeMS = resp.Events.NextBeforeMS
+		beforeID = resp.Events.NextBeforeID
+		if pages > total+2 {
+			t.Fatal("pagination did not terminate")
+		}
+	}
+	if len(seen) != total {
+		t.Fatalf("collected %d unique events, want %d (same-timestamp rows were skipped)", len(seen), total)
 	}
 }
 

@@ -95,6 +95,8 @@ const createPresentationSnapshot = (id: string): MonitoringPresentationSnapshot 
     filteredRows: [row],
     eventsHasMore: id.includes('more'),
     eventsLoadingMore: false,
+    eventsTotalCount: 1,
+    eventsLoadedCount: 1,
     lastRefreshedAt: new Date(1_768_759_000_000),
   };
 };

@@ -67,6 +67,7 @@ type Include struct {
 type EventsPage struct {
 	Limit    int    `json:"limit"`
 	BeforeMS *int64 `json:"before_ms"`
+	BeforeID *int64 `json:"before_id"`
 }
 
 type Response struct {
@@ -290,7 +291,9 @@ type RecentFailure struct {
 type EventsResponse struct {
 	Items        []EventRow `json:"items"`
 	NextBeforeMS int64      `json:"next_before_ms"`
+	NextBeforeID int64      `json:"next_before_id"`
 	HasMore      bool       `json:"has_more"`
+	TotalCount   int64      `json:"total_count"`
 }
 
 type EventRow struct {
@@ -346,6 +349,12 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 		Granularity:   granularity,
 	}
 
+	// summaryTotalCalls caches the count(*) computed for the summary so the
+	// events page can reuse it as total_count without a second table scan
+	// (summary and events use the exact same filter).
+	var summaryTotalCalls int64
+	summaryComputed := false
+
 	var modelStats []store.ModelStat
 	needsModelStats := req.Include.Summary || req.Include.ModelShare || req.Include.ModelStats
 	if needsModelStats {
@@ -384,6 +393,8 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 			return Response{}, err
 		}
 		response.Summary = buildSummary(agg, rollingAgg, activeDays, modelStats, taskBuckets, prices, zeroTokenModels)
+		summaryTotalCalls = agg.TotalCalls
+		summaryComputed = true
 	}
 	if req.Include.Timeline {
 		points, err := s.store.TimelineWithFilter(ctx, filter, granularity)
@@ -462,11 +473,27 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 		if req.Include.EventsPage.BeforeMS != nil {
 			beforeMS = *req.Include.EventsPage.BeforeMS
 		}
-		page, err := s.store.EventsPageWithFilter(ctx, filter, beforeMS, limit)
+		beforeID := int64(0)
+		if req.Include.EventsPage.BeforeID != nil {
+			beforeID = *req.Include.EventsPage.BeforeID
+		}
+		page, err := s.store.EventsPageWithFilter(ctx, filter, beforeMS, beforeID, limit)
 		if err != nil {
 			return Response{}, err
 		}
-		response.Events = buildEvents(page)
+		// total_count is the real number of events matching the current filter
+		// (time range + scope filters + search), independent of the pagination
+		// cursor. Reuse the summary aggregate count when it was already computed
+		// for this same filter to avoid a second scan; otherwise run a
+		// lightweight count(*).
+		total := summaryTotalCalls
+		if !summaryComputed {
+			total, err = s.store.EventsCountWithFilter(ctx, filter)
+			if err != nil {
+				return Response{}, err
+			}
+		}
+		response.Events = buildEvents(page, total)
 	}
 
 	return response, nil
@@ -710,9 +737,9 @@ func buildChannelShare(stats []store.ChannelModelStat, prices map[string]store.M
 		entry.row.Failure += stat.FailureCalls
 		entry.row.Tokens += stat.TotalTokens
 		entry.row.Cost += costForChannelStat(stat, prices)
-		if stat.AvgLatencyMS.Valid {
-			entry.latencySum += stat.AvgLatencyMS.Float64
-			entry.latencyN++
+		if stat.AvgLatencyMS.Valid && stat.LatencySamples > 0 {
+			entry.latencySum += stat.AvgLatencyMS.Float64 * float64(stat.LatencySamples)
+			entry.latencyN += stat.LatencySamples
 		}
 	}
 	result := make([]ChannelShareRow, 0, len(grouped))
@@ -1150,7 +1177,7 @@ func buildRecentFailures(failures []store.RecentFailure) []RecentFailure {
 	return result
 }
 
-func buildEvents(page store.EventsPage) *EventsResponse {
+func buildEvents(page store.EventsPage, totalCount int64) *EventsResponse {
 	items := make([]EventRow, 0, len(page.Items))
 	for _, item := range page.Items {
 		items = append(items, EventRow{
@@ -1186,7 +1213,7 @@ func buildEvents(page store.EventsPage) *EventsResponse {
 			FailSummary:           item.FailSummary,
 		})
 	}
-	return &EventsResponse{Items: items, NextBeforeMS: page.NextBeforeMS, HasMore: page.HasMore}
+	return &EventsResponse{Items: items, NextBeforeMS: page.NextBeforeMS, NextBeforeID: page.NextBeforeID, HasMore: page.HasMore, TotalCount: totalCount}
 }
 
 func sumCost(stats []store.ModelStat, prices map[string]store.ModelPrice) float64 {
@@ -1202,7 +1229,7 @@ func costForStat(stat store.ModelStat, prices map[string]store.ModelPrice) float
 	if model == "" {
 		model = stat.Model
 	}
-	return pricing.CostForModel(model, pricing.ModelTokens{
+	return pricing.CostForModelWithServiceTier(model, stat.ServiceTier, pricing.ModelTokens{
 		InputTokens:         stat.InputTokens,
 		OutputTokens:        stat.OutputTokens,
 		CachedTokens:        stat.CachedTokens,
@@ -1216,7 +1243,7 @@ func costForChannelStat(stat store.ChannelModelStat, prices map[string]store.Mod
 	if model == "" {
 		model = stat.Model
 	}
-	return pricing.CostForModel(model, pricing.ModelTokens{
+	return pricing.CostForModelWithServiceTier(model, stat.ServiceTier, pricing.ModelTokens{
 		InputTokens:         stat.InputTokens,
 		OutputTokens:        stat.OutputTokens,
 		CachedTokens:        stat.CachedTokens,
@@ -1230,7 +1257,7 @@ func costForAccountModelStat(stat store.AccountModelStat, prices map[string]stor
 	if model == "" {
 		model = stat.Model
 	}
-	return pricing.CostForModel(model, pricing.ModelTokens{
+	return pricing.CostForModelWithServiceTier(model, stat.ServiceTier, pricing.ModelTokens{
 		InputTokens:         stat.InputTokens,
 		OutputTokens:        stat.OutputTokens,
 		CachedTokens:        stat.CachedTokens,
@@ -1244,7 +1271,7 @@ func costForAPIKeyModelStat(stat store.APIKeyModelStat, prices map[string]store.
 	if model == "" {
 		model = stat.Model
 	}
-	return pricing.CostForModel(model, pricing.ModelTokens{
+	return pricing.CostForModelWithServiceTier(model, stat.ServiceTier, pricing.ModelTokens{
 		InputTokens:         stat.InputTokens,
 		OutputTokens:        stat.OutputTokens,
 		CachedTokens:        stat.CachedTokens,

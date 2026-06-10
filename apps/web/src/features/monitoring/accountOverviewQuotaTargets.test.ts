@@ -28,12 +28,15 @@ const createAccountRow = (overrides: Partial<MonitoringAccountRow> = {}): Monito
   models: overrides.models ?? [],
 });
 
+const createAuthState = (overrides: MonitoringAccountAuthState): MonitoringAccountAuthState =>
+  overrides;
+
 describe('accountOverviewQuotaTargets', () => {
   it('builds quota targets for providers the account actually used', () => {
     const authStateByRowId = new Map<string, MonitoringAccountAuthState>([
       [
         'account@example.com',
-        {
+        createAuthState({
           files: [
             {
               name: 'alpha.json',
@@ -57,9 +60,8 @@ describe('accountOverviewQuotaTargets', () => {
               account: 'account@example.com',
             },
           ],
-          toggleableFileNames: ['alpha.json', 'beta.json', 'gamma.json'],
           enabledState: 'enabled',
-        },
+        }),
       ],
     ]);
 
@@ -85,7 +87,7 @@ describe('accountOverviewQuotaTargets', () => {
     const authStateByRowId = new Map<string, MonitoringAccountAuthState>([
       [
         'account@example.com',
-        {
+        createAuthState({
           files: [
             {
               name: 'codex-without-account.json',
@@ -95,9 +97,8 @@ describe('accountOverviewQuotaTargets', () => {
               account: 'account@example.com',
             },
           ],
-          toggleableFileNames: ['codex-without-account.json'],
           enabledState: 'enabled',
-        },
+        }),
       ],
     ]);
 
@@ -127,7 +128,7 @@ describe('accountOverviewQuotaTargets', () => {
     const authStateByRowId = new Map<string, MonitoringAccountAuthState>([
       [
         'account@example.com',
-        {
+        createAuthState({
           files: [
             {
               name: 'antigravity.json',
@@ -162,9 +163,8 @@ describe('accountOverviewQuotaTargets', () => {
               label: 'Disabled Claude',
             },
           ],
-          toggleableFileNames: [],
           enabledState: 'enabled',
-        },
+        }),
       ],
     ]);
 
@@ -190,7 +190,7 @@ describe('accountOverviewQuotaTargets', () => {
     const authStateByRowId = new Map<string, MonitoringAccountAuthState>([
       [
         'account@example.com',
-        {
+        createAuthState({
           files: [
             {
               name: 'codex.json',
@@ -207,9 +207,8 @@ describe('accountOverviewQuotaTargets', () => {
               account: 'account@example.com',
             },
           ],
-          toggleableFileNames: ['codex.json', 'claude.json'],
           enabledState: 'enabled',
-        },
+        }),
       ],
     ]);
 

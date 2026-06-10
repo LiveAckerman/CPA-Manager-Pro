@@ -1,3 +1,8 @@
+import type {
+  AuthFilesCodexPlanFilter,
+  AuthFilesCodexStatusFilter,
+} from './model/authFilesPageModel';
+
 export const AUTH_FILES_SORT_MODES = [
   'default',
   'name-asc',
@@ -63,6 +68,8 @@ export type AuthFilesUiState = {
   problemOnly?: boolean;
   disabledOnly?: boolean;
   healthyOnly?: boolean;
+  codexStatusFilter?: AuthFilesCodexStatusFilter;
+  codexPlanFilter?: AuthFilesCodexPlanFilter;
   compactMode?: boolean;
   search?: string;
   page?: number;

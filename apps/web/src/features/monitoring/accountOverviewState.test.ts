@@ -11,9 +11,11 @@ import {
   shouldClampAccountOverviewPage,
   shouldResetAccountOverviewPage,
   normalizeAccountOverviewPageSize,
+  normalizeAccountDisplayMode,
   normalizeAccountOverviewMode,
   normalizeAccountOverviewUiState,
   normalizeAccountSortState,
+  resolveAccountDisplayText,
   sortAccountRows,
 } from './accountOverviewState';
 import type { AuthFileItem } from '@/types';
@@ -94,15 +96,23 @@ describe('accountOverviewState', () => {
     expect(normalizeAccountOverviewMode('card')).toBe('card');
   });
 
+  it('defaults invalid account display modes to masked', () => {
+    expect(normalizeAccountDisplayMode(undefined)).toBe('masked');
+    expect(normalizeAccountDisplayMode('visible')).toBe('masked');
+    expect(normalizeAccountDisplayMode('full')).toBe('full');
+  });
+
   it('normalizes persisted overview ui state', () => {
     expect(
       normalizeAccountOverviewUiState({
         mode: 'card',
+        accountDisplayMode: 'full',
         sort: { key: 'totalCost', direction: 'asc' },
         cardPagination: { page: 3, pageSize: 18 },
       })
     ).toEqual({
       mode: 'card',
+      accountDisplayMode: 'full',
       sort: { key: 'totalCost', direction: 'asc' },
       cardPagination: { page: 3, pageSize: 18 },
     });
@@ -115,8 +125,46 @@ describe('accountOverviewState', () => {
       })
     ).toEqual({
       mode: 'table',
+      accountDisplayMode: 'masked',
       sort: DEFAULT_ACCOUNT_SORT,
       cardPagination: { page: 1, pageSize: 12 },
+    });
+  });
+
+  it('resolves masked and full account labels with full account tooltip text', () => {
+    const row = createAccountRow({
+      account: 'very-long-account-name@example.com',
+      displayAccount: 'very-long-account-name@example.com',
+      accountMasked: 'ver***@example.com',
+    });
+
+    expect(resolveAccountDisplayText(row, 'masked')).toMatchObject({
+      primary: 'ver***@example.com',
+      fullAccount: 'very-long-account-name@example.com',
+    });
+    expect(resolveAccountDisplayText(row, 'masked').title).toContain(
+      'very-long-account-name@example.com'
+    );
+    expect(resolveAccountDisplayText(row, 'full')).toMatchObject({
+      primary: 'very-long-account-name@example.com',
+      fullAccount: 'very-long-account-name@example.com',
+    });
+  });
+
+  it('keeps channel labels primary while switching account secondary text', () => {
+    const row = createAccountRow({
+      account: 'account@example.com',
+      displayAccount: 'Primary Channel',
+      accountMasked: 'acc***@example.com',
+    });
+
+    expect(resolveAccountDisplayText(row, 'masked')).toMatchObject({
+      primary: 'Primary Channel',
+      secondary: 'acc***@example.com',
+    });
+    expect(resolveAccountDisplayText(row, 'full')).toMatchObject({
+      primary: 'Primary Channel',
+      secondary: 'account@example.com',
     });
   });
 
@@ -170,6 +218,8 @@ describe('accountOverviewState', () => {
       'input-tokens',
       'output-tokens',
       'cached-tokens',
+      'cache-creation-tokens',
+      'cache-read-tokens',
     ]);
   });
 
@@ -270,7 +320,23 @@ describe('accountOverviewState', () => {
 
     expect(result.enabledState).toBe('mixed');
     expect(result.files.map((file) => file.name)).toEqual(['alpha.json', 'beta.json']);
-    expect(result.toggleableFileNames).toEqual(['alpha.json', 'beta.json']);
+  });
+
+  it('uses normalized auth file disabled state when building account auth state', () => {
+    const authFilesByIndex = new Map<string, AuthFileItem>([
+      [
+        '1',
+        {
+          name: 'alpha.json',
+          authIndex: '1',
+          status: 'inactive',
+        },
+      ],
+    ]);
+
+    const result = buildMonitoringAccountAuthState(['1'], authFilesByIndex);
+
+    expect(result.enabledState).toBe('disabled');
   });
 
   it('builds account auth state from all auth files that belong to the same account', () => {
@@ -320,8 +386,37 @@ describe('accountOverviewState', () => {
     const accountState = result.get('account@example.com');
 
     expect(accountState?.files.map((file) => file.name)).toEqual(['alpha.json', 'beta.json']);
-    expect(accountState?.toggleableFileNames).toEqual(['alpha.json', 'beta.json']);
     expect(accountState?.enabledState).toBe('mixed');
+  });
+
+  it('keeps row auth indices when account identity adds related auth files', () => {
+    const authFilesByIndex = new Map<string, AuthFileItem>([
+      [
+        'auth-file-1',
+        {
+          name: 'alpha.json',
+          authIndex: 'auth-file-1',
+          account: 'account@example.com',
+          label: 'Alpha',
+          disabled: false,
+        },
+      ],
+    ]);
+
+    const rows = [
+      createAccountRow({
+        id: 'account@example.com',
+        account: 'account@example.com',
+        authLabels: ['Alpha'],
+        authIndices: ['provider-auth'],
+      }),
+    ];
+
+    const result = buildMonitoringAccountAuthStateMap(rows, authFilesByIndex);
+    const accountState = result.get('account@example.com');
+
+    expect(accountState?.files.map((file) => file.name)).toEqual(['alpha.json']);
+    expect(accountState?.enabledState).toBe('enabled');
   });
 
   it('does not merge auth files from a different account just because labels match', () => {
@@ -361,7 +456,6 @@ describe('accountOverviewState', () => {
     const accountState = result.get('primary@example.com');
 
     expect(accountState?.files.map((file) => file.name)).toEqual(['alpha.json']);
-    expect(accountState?.toggleableFileNames).toEqual(['alpha.json']);
     expect(accountState?.enabledState).toBe('enabled');
   });
 

@@ -482,6 +482,7 @@ export interface MonitoringAnalyticsFilters {
 export interface MonitoringAnalyticsEventsPageRequest {
   limit?: number;
   before_ms?: number | null;
+  before_id?: number | null;
 }
 
 export interface MonitoringAnalyticsInclude {
@@ -747,7 +748,9 @@ export interface MonitoringAnalyticsEventRow {
 export interface MonitoringAnalyticsEventsResponse {
   items: MonitoringAnalyticsEventRow[];
   next_before_ms: number;
+  next_before_id?: number;
   has_more: boolean;
+  total_count?: number;
 }
 
 export interface MonitoringAnalyticsResponse {

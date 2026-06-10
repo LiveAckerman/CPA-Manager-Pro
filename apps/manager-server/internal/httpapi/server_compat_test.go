@@ -173,11 +173,20 @@ func TestServerCompatSetupConfigAndEnvLock(t *testing.T) {
 		t.Fatalf("rotated setup = %#v", rotatedSetup)
 	}
 
-	rebindBody := `{"config":{"cpaConnection":{"cpaBaseUrl":"http://other.local","managementKey":"other-key"},"collector":{"enabled":false}}}`
+	otherCPA := testutil.NewCPAMock(t)
+	otherCPA.ManagementKey = "other-key"
+	rebindBody := `{"config":{"cpaConnection":{"cpaBaseUrl":"` + otherCPA.URL() + `","managementKey":"other-key"},"collector":{"enabled":false}}}`
 	rebindRR := testutil.Request(t, handler, http.MethodPut, "/usage-service/config", rebindBody, testutil.AdminKey)
-	testutil.RequireStatus(t, rebindRR, http.StatusConflict)
-	if !strings.Contains(rebindRR.Body.String(), `"code":"cpa_connection_already_bound"`) {
+	testutil.RequireStatus(t, rebindRR, http.StatusOK)
+	if !strings.Contains(rebindRR.Body.String(), `"cpaBaseUrl":"`+otherCPA.URL()+`"`) {
 		t.Fatalf("rebind body = %s", rebindRR.Body.String())
+	}
+	reboundSetup, ok, err := db.LoadSetup(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("load rebound setup ok=%v err=%v", ok, err)
+	}
+	if reboundSetup.CPAUpstreamURL != otherCPA.URL() || reboundSetup.ManagementKey != "other-key" {
+		t.Fatalf("rebound setup = %#v", reboundSetup)
 	}
 
 	envCfg := testutil.NewConfig(t)

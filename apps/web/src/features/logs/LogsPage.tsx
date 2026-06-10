@@ -38,6 +38,7 @@ import {
 import { parseLogLine } from './hooks/logParsing';
 import { useLogFilters } from './hooks/useLogFilters';
 import { isNearBottom, useLogScroller } from './hooks/useLogScroller';
+import { isFileLogsAvailable } from './logFeatureAvailability';
 import styles from './LogsPage.module.scss';
 
 interface ErrorLogItem {
@@ -70,11 +71,12 @@ export function LogsPage() {
   const { showNotification, showConfirmation } = useNotificationStore();
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
   const config = useConfigStore((state) => state.config);
-  const requestLogEnabled = config?.requestLog ?? false;
+  const fileLogsAvailable = isFileLogsAvailable(config);
 
   const [activeTab, setActiveTab] = useState<TabType>(() =>
     searchParams.get('tab') === 'errors' ? 'errors' : 'logs'
   );
+  const requestLogEnabled = config?.requestLog ?? false;
   const [logState, setLogState] = useState<LogState>({ buffer: [], visibleFrom: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -110,6 +112,7 @@ export function LogsPage() {
   const latestTimestampRef = useRef<number>(0);
 
   const disableControls = connectionStatus !== 'connected';
+  const canLoadFileLogs = activeTab === 'logs' && fileLogsAvailable;
 
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
@@ -123,6 +126,11 @@ export function LogsPage() {
   };
 
   const loadLogs = async (incremental = false) => {
+    if (!canLoadFileLogs) {
+      setLoading(false);
+      return;
+    }
+
     if (connectionStatus !== 'connected') {
       setLoading(false);
       return;
@@ -200,8 +208,6 @@ export function LogsPage() {
     }
   };
 
-  useHeaderRefresh(() => loadLogs(false));
-
   const clearLogs = async () => {
     showConfirmation({
       title: t('logs.clear_confirm_title', { defaultValue: 'Clear Logs' }),
@@ -255,6 +261,13 @@ export function LogsPage() {
     }
   };
 
+  useHeaderRefresh(() => {
+    if (activeTab === 'errors') {
+      return loadErrorLogs();
+    }
+    return loadLogs(false);
+  }, connectionStatus === 'connected');
+
   const downloadErrorLog = async (name: string) => {
     try {
       const response = await logsApi.downloadErrorLog(name);
@@ -275,12 +288,20 @@ export function LogsPage() {
   }, [searchParams]);
 
   useEffect(() => {
-    if (connectionStatus === 'connected') {
-      latestTimestampRef.current = 0;
-      loadLogs(false);
+    if (connectionStatus !== 'connected') {
+      setLoading(false);
+      return;
     }
+
+    if (!canLoadFileLogs) {
+      setLoading(false);
+      return;
+    }
+
+    latestTimestampRef.current = 0;
+    loadLogs(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionStatus]);
+  }, [connectionStatus, canLoadFileLogs]);
 
   useEffect(() => {
     if (activeTab !== 'errors') return;
@@ -290,7 +311,7 @@ export function LogsPage() {
   }, [activeTab, connectionStatus, requestLogEnabled]);
 
   useEffect(() => {
-    if (!autoRefresh || connectionStatus !== 'connected') {
+    if (!autoRefresh || connectionStatus !== 'connected' || !canLoadFileLogs) {
       return;
     }
     const id = window.setInterval(() => {
@@ -298,7 +319,7 @@ export function LogsPage() {
     }, 8000);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRefresh, connectionStatus]);
+  }, [autoRefresh, connectionStatus, canLoadFileLogs]);
 
   const visibleLines = useMemo(
     () => logState.buffer.slice(logState.visibleFrom),

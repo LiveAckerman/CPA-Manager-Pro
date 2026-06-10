@@ -285,6 +285,58 @@ func TestNormalizeRawReadsCPA7118UsageFields(t *testing.T) {
 	}
 }
 
+func TestNormalizeRawReadsAnthropicCacheUsageFields(t *testing.T) {
+	payload := `{
+	  "timestamp": "2026-04-25T00:00:00Z",
+	  "provider": "anthropic",
+	  "model": "claude-sonnet-4-5",
+	  "endpoint": "POST /v1/messages",
+	  "usage": {
+	    "input_tokens": 100,
+	    "output_tokens": 20,
+	    "cached_tokens": 34,
+	    "cache_creation_input_tokens": 11,
+	    "cache_read_input_tokens": 23
+	  }
+	}`
+	event, err := NormalizeRaw([]byte(payload))
+	if err != nil {
+		t.Fatalf("normalize anthropic payload: %v", err)
+	}
+	if event.InputTokens != 100 || event.OutputTokens != 20 ||
+		event.CachedTokens != 34 || event.CacheReadTokens != 23 ||
+		event.CacheCreationTokens != 11 || event.TotalTokens != 154 {
+		t.Fatalf("event tokens = %#v", event)
+	}
+
+	legacyPayload := BuildPayload([]Event{event})
+	detail := legacyPayload.APIs["POST /v1/messages"].Models["claude-sonnet-4-5"].Details[0]
+	if detail.Tokens.CachedTokens != 0 || detail.Tokens.CacheReadTokens != 23 ||
+		detail.Tokens.CacheCreationTokens != 11 || detail.Tokens.TotalTokens != 154 {
+		t.Fatalf("detail tokens = %#v", detail.Tokens)
+	}
+}
+
+func TestNormalizeRawReadsAnthropicCacheUsageFieldsAtTopLevel(t *testing.T) {
+	payload := `{
+	  "timestamp": "2026-04-25T00:00:00Z",
+	  "provider": "anthropic",
+	  "model": "claude-opus-4-1",
+	  "endpoint": "POST /v1/messages",
+	  "input_tokens": 10,
+	  "output_tokens": 5,
+	  "cacheReadInputTokens": 7,
+	  "cacheCreationInputTokens": 3
+	}`
+	event, err := NormalizeRaw([]byte(payload))
+	if err != nil {
+		t.Fatalf("normalize anthropic top-level payload: %v", err)
+	}
+	if event.CacheReadTokens != 7 || event.CacheCreationTokens != 3 || event.TotalTokens != 25 {
+		t.Fatalf("event tokens = %#v", event)
+	}
+}
+
 func TestCompatibleCachedTokensDoesNotDoubleCountFineGrainedCache(t *testing.T) {
 	if got := CompatibleCachedTokens(5, 0, 4, 1); got != 0 {
 		t.Fatalf("fully mirrored cached tokens = %d, want 0", got)

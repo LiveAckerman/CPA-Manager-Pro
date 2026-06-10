@@ -2,17 +2,22 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { TFunction } from 'i18next';
 import { AccountExpandedDetails, AccountOverviewCard } from './MonitoringCenterPage';
-import { buildEmptyMonitoringStatusData } from '@/features/monitoring/accountOverviewState';
+import { MonitoringSummarySection } from '@/features/monitoring/components/MonitoringSummarySection';
+import {
+  buildPrimarySummaryCards,
+  buildSecondarySummaryCards,
+} from '@/features/monitoring/model/monitoringCenterPageModel';
+import type { MonitoringSummary } from '@/features/monitoring/hooks/useMonitoringData';
+import {
+  buildEmptyMonitoringStatusData,
+  type MonitoringAccountAuthState,
+} from '@/features/monitoring/accountOverviewState';
 import { buildRealtimeSourceDisplay } from '@/features/monitoring/realtimeSourceDisplay';
 
 const t = ((key: string, options?: Record<string, unknown>) => {
   const copy: Record<string, string> = {
-    'monitoring.account_overview_enable_all': 'Enable all',
-    'monitoring.account_overview_disable_all': 'Disable all',
     'monitoring.restore_account_scope': 'Restore account scope',
     'monitoring.focus_account': 'Focus account',
-    'monitoring.account_overview_enabled_label': 'Enabled',
-    'monitoring.account_overview_enabled_label_short': 'Enabled',
     'auth_files.status_toggle_label': 'Enabled',
     'monitoring.account_overview_health_label': 'Health',
     'monitoring.account_overview_health_hint': 'Health hint',
@@ -33,6 +38,7 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'monitoring.account_overview_collapse_models': 'Collapse',
     'monitoring.account_overview_no_models': 'No model details',
     'monitoring.total_calls': 'Total calls',
+    'monitoring.call_success_rate': 'Success rate',
     'monitoring.calls': 'Calls',
     'stats.success': 'Success',
     'stats.failure': 'Failure',
@@ -49,6 +55,13 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'monitoring.cache_read_tokens_short': 'Read',
     'monitoring.cache_creation_tokens_short': 'Create',
     'monitoring.estimated_cost': 'Estimated Cost',
+    'monitoring.estimated_cost_hint': 'Configured model prices',
+    'monitoring.estimated_cost_missing': 'No configured model prices',
+    'monitoring.accounts_suffix': 'accounts',
+    'monitoring.groups_suffix': 'groups',
+    'monitoring.reasoning_tokens': 'Reasoning',
+    'monitoring.of_token_mix': 'Share',
+    'monitoring.of_input_tokens': 'Input share',
     'usage_stats.model_price_model': 'Model',
     'monitoring.last_sync': 'Last sync',
     'monitoring.account_quota_title': 'Account Quota',
@@ -71,6 +84,118 @@ const t = ((key: string, options?: Record<string, unknown>) => {
   return value;
 }) as TFunction;
 
+const createAuthState = (overrides: MonitoringAccountAuthState): MonitoringAccountAuthState =>
+  overrides;
+
+describe('MonitoringCenterPage summary cards', () => {
+  it('renders all request monitoring summary metrics in one ordered grid with large values intact', () => {
+    const summary: MonitoringSummary = {
+      totalCalls: 25_500,
+      successCalls: 23_600,
+      failureCalls: 1_900,
+      successRate: 0.999,
+      inputTokens: 2_783_500_000,
+      outputTokens: 11_700_000,
+      reasoningTokens: 5_000_000,
+      cachedTokens: 2_595_300_000,
+      cacheReadTokens: 444_400_000,
+      cacheCreationTokens: 555_500_000,
+      totalTokens: 2_795_200_000,
+      totalCost: 9_999_999.99,
+      averageLatencyMs: 999,
+      rpm30m: 0,
+      tpm30m: 0,
+      avgDailyRequests: 0,
+      avgDailyTokens: 0,
+      approxTasks: 0,
+      approxTaskFailures: 0,
+      approxTaskSuccessRate: 0,
+      zeroTokenCalls: 0,
+      zeroTokenModels: [],
+    };
+    const primaryCards = buildPrimarySummaryCards({
+      summary,
+      accountCount: 999,
+      failedGroupCount: 88,
+      hasPrices: true,
+      locale: 'en',
+      t,
+    });
+    const secondaryCards = buildSecondarySummaryCards(summary, 'en', t);
+
+    const html = renderToStaticMarkup(
+      <MonitoringSummarySection primaryCards={primaryCards} secondaryCards={secondaryCards} />
+    );
+    const labels = [
+      'Total calls',
+      'Success rate',
+      'Failure calls',
+      'Estimated Cost',
+      'Total Tokens',
+      'Input Tokens',
+      'Output Tokens',
+      'Cached Tokens',
+    ];
+    let previousIndex = -1;
+
+    labels.forEach((label) => {
+      const index = html.indexOf(label);
+      expect(index).toBeGreaterThan(previousIndex);
+      previousIndex = index;
+    });
+
+    expect(html).toContain('_summaryGrid');
+    expect(html.match(/<strong/g)).toHaveLength(8);
+    expect(html).toContain('25.5K');
+    expect(html).toContain('1.9K');
+    expect(html).toContain('2.8B');
+    expect(html).toContain('3.6B');
+    expect(html).toContain('role="tooltip"');
+    expect(html).toContain('2,795,200,000');
+    expect(html).toContain('2,783,500,000');
+    expect(html).toContain('3,595,200,000');
+    expect(html).toContain('$9,999,999.99');
+    expect(html).toContain('Reasoning 5.0M');
+    expect(html).toContain('Share 99.6%');
+    expect(html).toContain('Share 0.4%');
+    expect(html).toContain('Share 56.2% · Cached Tokens 2.6B · Create 555.5M · Read 444.4M');
+  });
+
+  it('hides cache creation and read meta when both cached sub-metrics are zero', () => {
+    const secondaryCards = buildSecondarySummaryCards(
+      {
+        totalCalls: 1,
+        successCalls: 1,
+        failureCalls: 0,
+        successRate: 1,
+        inputTokens: 1_000,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        cachedTokens: 932,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        totalTokens: 1_000,
+        totalCost: 0,
+        averageLatencyMs: null,
+        rpm30m: 0,
+        tpm30m: 0,
+        avgDailyRequests: 0,
+        avgDailyTokens: 0,
+        approxTasks: 0,
+        approxTaskFailures: 0,
+        approxTaskSuccessRate: 0,
+        zeroTokenCalls: 0,
+        zeroTokenModels: [],
+      },
+      'en',
+      t
+    );
+    const cachedCard = secondaryCards.find((card) => card.label === 'Cached Tokens');
+
+    expect(cachedCard?.meta).toBe('Input share 93.2%');
+  });
+});
+
 describe('MonitoringCenterPage account card', () => {
   it('prefers readable channel names in realtime source cells', () => {
     const display = buildRealtimeSourceDisplay(
@@ -81,6 +206,7 @@ describe('MonitoringCenterPage account card', () => {
         channel: 'Claude Relay',
         channelHost: 'relay.example.com',
         provider: 'openai',
+        source: 'Team Key',
         sourceMasked: 'Team Key',
       },
       t
@@ -97,6 +223,7 @@ describe('MonitoringCenterPage account card', () => {
       authLabel: 'alice',
       channel: '-',
       channelHost: 'relay.example.com',
+      source: 'Team Key',
       sourceMasked: 'Team Key',
     };
 
@@ -125,9 +252,20 @@ describe('MonitoringCenterPage account card', () => {
           ...baseRow,
           provider: '-',
         },
-        t
+        t,
+        'full'
       ).meta
     ).toBe('alice@example.com');
+    expect(
+      buildRealtimeSourceDisplay(
+        {
+          ...baseRow,
+          provider: '-',
+        },
+        t,
+        'masked'
+      ).meta
+    ).toBe('ali***@example.com');
   });
 
   it('prefers resolved hosts over generic provider labels', () => {
@@ -139,6 +277,7 @@ describe('MonitoringCenterPage account card', () => {
         channel: 'codex',
         channelHost: 'api.freemodel.dev',
         provider: 'codex',
+        source: 'm:fe_o_raw_c68c',
         sourceMasked: 'm:fe_o...c68c',
       },
       t
@@ -148,7 +287,62 @@ describe('MonitoringCenterPage account card', () => {
     expect(display.meta).toBe('Provider: codex');
   });
 
-  it('renders bulk action buttons for mixed account auth state', () => {
+  it('switches account labels between masked and full display with full tooltip text', () => {
+    const row = {
+      id: 'very-long-account-name@example.com',
+      account: 'very-long-account-name@example.com',
+      displayAccount: 'very-long-account-name@example.com',
+      accountMasked: 'ver***@example.com',
+      authLabels: ['alpha'],
+      authIndices: ['1'],
+      channels: ['default'],
+      totalCalls: 1,
+      successCalls: 1,
+      failureCalls: 0,
+      successRate: 1,
+      inputTokens: 1,
+      outputTokens: 1,
+      cachedTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      totalTokens: 2,
+      totalCost: 0,
+      averageLatencyMs: null,
+      lastSeenAt: Date.UTC(2026, 4, 10, 12, 0, 0),
+      recentPattern: [true],
+      models: [],
+    };
+    const renderCard = (accountDisplayMode: 'masked' | 'full') =>
+      renderToStaticMarkup(
+        <AccountOverviewCard
+          row={row}
+          authState={createAuthState({
+            files: [],
+            enabledState: 'enabled',
+          })}
+          hasPrices={false}
+          locale="en"
+          t={t}
+          accountDisplayMode={accountDisplayMode}
+          isExpanded={false}
+          isFocused={false}
+          statusData={buildEmptyMonitoringStatusData({
+            startMs: Date.UTC(2026, 4, 10, 0, 0, 0),
+            endMs: Date.UTC(2026, 4, 10, 23, 59, 59),
+          })}
+          scopeText="Scope: 5/10 12:00 AM - 11:59 PM"
+          onToggle={() => {}}
+          onFocus={() => {}}
+          onRefreshQuota={() => {}}
+        />
+      );
+
+    expect(renderCard('masked')).toContain('>ver***@example.com</span>');
+    expect(renderCard('masked')).toContain('very-long-account-name@example.com');
+    expect(renderCard('full')).toContain('>very-long-account-name@example.com</span>');
+  });
+
+  it('does not render account enable or disable controls for mixed account auth state', () => {
     const html = renderToStaticMarkup(
       <AccountOverviewCard
         row={{
@@ -175,14 +369,14 @@ describe('MonitoringCenterPage account card', () => {
           recentPattern: [true, false],
           models: [],
         }}
-        authState={{
+        authState={createAuthState({
           files: [],
-          toggleableFileNames: ['alpha.json', 'beta.json'],
           enabledState: 'mixed',
-        }}
+        })}
         hasPrices
         locale="en"
         t={t}
+        accountDisplayMode="masked"
         isExpanded={false}
         isFocused={false}
         statusData={buildEmptyMonitoringStatusData({
@@ -190,16 +384,14 @@ describe('MonitoringCenterPage account card', () => {
           endMs: Date.UTC(2026, 4, 10, 23, 59, 59),
         })}
         scopeText="Scope: 5/10 12:00 AM - 11:59 PM"
-        statusUpdating={false}
         onToggle={() => {}}
         onFocus={() => {}}
-        onToggleEnabled={() => {}}
         onRefreshQuota={() => {}}
       />
     );
 
-    expect(html).toContain('Enable all');
-    expect(html).toContain('Disable all');
+    expect(html).not.toContain('Enable all');
+    expect(html).not.toContain('Disable all');
     expect(html).not.toContain('type="checkbox"');
   });
 
@@ -261,14 +453,14 @@ describe('MonitoringCenterPage account card', () => {
             },
           ],
         }}
-        authState={{
+        authState={createAuthState({
           files: [],
-          toggleableFileNames: ['alpha.json'],
           enabledState: 'enabled',
-        }}
+        })}
         hasPrices
         locale="en"
         t={t}
+        accountDisplayMode="masked"
         isExpanded
         isFocused={false}
         statusData={buildEmptyMonitoringStatusData({
@@ -276,10 +468,8 @@ describe('MonitoringCenterPage account card', () => {
           endMs: Date.UTC(2026, 4, 10, 23, 59, 59),
         })}
         scopeText="Scope: 5/10 12:00 AM - 11:59 PM"
-        statusUpdating={false}
         onToggle={() => {}}
         onFocus={() => {}}
-        onToggleEnabled={() => {}}
         onRefreshQuota={() => {}}
       />
     );
@@ -292,7 +482,7 @@ describe('MonitoringCenterPage account card', () => {
     expect(html).not.toContain('<table');
   });
 
-  it('uses a static enabled label beside the account toggle', () => {
+  it('does not render an account enabled toggle for disabled account auth state', () => {
     const html = renderToStaticMarkup(
       <AccountOverviewCard
         row={{
@@ -319,14 +509,14 @@ describe('MonitoringCenterPage account card', () => {
           recentPattern: [],
           models: [],
         }}
-        authState={{
+        authState={createAuthState({
           files: [],
-          toggleableFileNames: ['alpha.json'],
           enabledState: 'disabled',
-        }}
+        })}
         hasPrices
         locale="en"
         t={t}
+        accountDisplayMode="masked"
         isExpanded={false}
         isFocused={false}
         statusData={buildEmptyMonitoringStatusData({
@@ -334,16 +524,14 @@ describe('MonitoringCenterPage account card', () => {
           endMs: Date.UTC(2026, 4, 10, 23, 59, 59),
         })}
         scopeText="Scope: 5/10 12:00 AM - 11:59 PM"
-        statusUpdating={false}
         onToggle={() => {}}
         onFocus={() => {}}
-        onToggleEnabled={() => {}}
         onRefreshQuota={() => {}}
       />
     );
 
-    expect(html).toContain('Enabled');
-    expect(html).not.toContain('monitoring.account_overview_enabled_label_short');
+    expect(html).not.toContain('type="checkbox"');
+    expect(html).not.toContain('aria-checked');
   });
 
   it('renders table expanded details with token cards and cache columns in top model table', () => {

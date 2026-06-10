@@ -452,6 +452,7 @@ go run ./cmd/cpa-manager-plus
 - CLIProxyAPI: https://github.com/router-for-me/CLIProxyAPI
 - Redis usage queue documentation: https://help.router-for.me/management/redis-usage-queue.html
 - Migration from CPA-Manager: [docs/migration-from-cpa-manager.md](docs/migration-from-cpa-manager.md)
+- Reset the Manager Server admin key: [docs/reset-admin-key.md](docs/reset-admin-key.md)
 - Release checklist: [docs/release-checklist.md](docs/release-checklist.md)
 
 ## Acknowledgements

@@ -1,7 +1,11 @@
 // Package pricing converts token aggregates into monetary cost given a model price book.
 package pricing
 
-import "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
+import (
+	"strings"
+
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
+)
 
 // PerMillion divides by one million to convert token-priced units (per 1M tokens).
 const PerMillion = 1_000_000.0
@@ -51,6 +55,37 @@ func CostForModel(modelName string, tokens ModelTokens, prices map[string]model.
 		float64(cachedTokens)*price.Cache/PerMillion
 }
 
+// ServiceTierMultiplier returns the OpenAI Priority processing multiplier for
+// the actual usage service tier. This compatibility layer keeps today's tier
+// multiplier rules centralized; a future price model should store explicit
+// per-tier prices such as standard, priority, flex, and batch.
+func ServiceTierMultiplier(modelName string, serviceTier string) float64 {
+	tier := strings.ToLower(strings.TrimSpace(serviceTier))
+	if tier != "priority" && tier != "fast" {
+		return 1
+	}
+
+	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	switch {
+	case isModelFamily(modelName, "gpt-5.5"):
+		return 2.5
+	case isModelFamily(modelName, "gpt-5.4-mini"):
+		return 2
+	case isModelFamily(modelName, "gpt-5.4"):
+		return 2
+	case isModelFamily(modelName, "gpt-5.3-codex"):
+		return 2
+	default:
+		return 1
+	}
+}
+
+// CostForModelWithServiceTier computes standard token cost first, then applies
+// the multiplier for the actual service_tier recorded by usage.
+func CostForModelWithServiceTier(modelName string, serviceTier string, tokens ModelTokens, prices map[string]model.ModelPrice) float64 {
+	return CostForModel(modelName, tokens, prices) * ServiceTierMultiplier(modelName, serviceTier)
+}
+
 // SumCost folds CostForModel over a slice of (model, tokens) tuples.
 type Item struct {
 	Model  string
@@ -78,4 +113,8 @@ func fallbackPrice(value float64, fallback float64) float64 {
 		return value
 	}
 	return fallback
+}
+
+func isModelFamily(modelName string, family string) bool {
+	return modelName == family || strings.HasPrefix(modelName, family+"-")
 }

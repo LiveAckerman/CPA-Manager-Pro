@@ -131,25 +131,7 @@ Plus 会把 CPA Management Key 加密存储到 SQLite。默认数据密钥位于
 
 ## 管理员密钥丢失处理
 
-当前版本没有在线重置管理员密钥接口。已有 `settings.admin_credential_v1` 时，重新设置 `CPA_MANAGER_ADMIN_KEY` 不会覆盖旧凭证。
-
-离线恢复步骤：
-
-1. 停止 Manager Server。
-2. 备份整个 `/data`。
-3. 删除 SQLite 中的管理员凭证记录：
-
-```bash
-sqlite3 /path/to/usage.sqlite "delete from settings where key = 'admin_credential_v1';"
-```
-
-4. 使用新的管理员密钥启动：
-
-```bash
-CPA_MANAGER_ADMIN_KEY='replace-with-a-long-random-admin-key' ./cpa-manager-plus
-```
-
-Docker 场景可以用临时 sqlite 容器或宿主机 sqlite 工具操作挂载目录。不要删除 `manager_config_v1`、`setup` 或 `data.key`。
+管理员密钥重置指引已单独维护。请先停止 Manager Server、备份 `/data`，再按 [重置 Manager Server 管理员密钥](reset-admin-key.zh-CN.md) 处理。
 
 ## 回滚
 

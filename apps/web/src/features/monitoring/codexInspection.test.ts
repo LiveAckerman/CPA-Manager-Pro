@@ -16,6 +16,7 @@ import {
   type CodexInspectionRunResult,
 } from './codexInspection';
 import {
+  buildCodexInspectionPaginationState,
   buildConfigOverviewItems,
   countActions,
   filterByAction,
@@ -323,6 +324,29 @@ describe('Codex inspection action presentation', () => {
     });
     expect(filterByAction(items, 'reauth').map((item) => item.action)).toEqual(['reauth']);
     expect(filterByAction(items, 'http_401').map((item) => item.statusCode)).toEqual([401, 401]);
+  });
+
+  it('paginates inspection results and clamps out-of-range pages', () => {
+    const items = Array.from({ length: 45 }, (_, index) =>
+      createResultItem('disable', {
+        key: `item-${index + 1}`,
+        fileName: `item-${index + 1}.json`,
+      })
+    );
+
+    const secondPage = buildCodexInspectionPaginationState(items, 2, 20);
+    expect(secondPage.currentPage).toBe(2);
+    expect(secondPage.totalPages).toBe(3);
+    expect(secondPage.startItem).toBe(21);
+    expect(secondPage.endItem).toBe(40);
+    expect(secondPage.pageItems).toHaveLength(20);
+    expect(secondPage.pageItems[0].fileName).toBe('item-21.json');
+
+    const clamped = buildCodexInspectionPaginationState(items, 99, 20);
+    expect(clamped.currentPage).toBe(3);
+    expect(clamped.startItem).toBe(41);
+    expect(clamped.endItem).toBe(45);
+    expect(clamped.pageItems).toHaveLength(5);
   });
 });
 

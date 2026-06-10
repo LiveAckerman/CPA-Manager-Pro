@@ -45,50 +45,6 @@
   min-width: 0;
 }
 
-.modeSwitchTabs {
-  display: inline-flex;
-  align-items: stretch;
-  flex: 0 0 auto;
-  padding: 3px;
-  border: 1px solid color-mix(in srgb, var(--inspect-line) 86%, transparent);
-  border-radius: 12px;
-  background: var(--inspect-surface-muted);
-}
-
-.modeSwitchTab {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 34px;
-  min-width: 104px;
-  padding: 0 14px;
-  border-radius: 9px;
-  color: var(--inspect-muted);
-  font-size: 13px;
-  font-weight: 800;
-  line-height: 1.2;
-  letter-spacing: 0;
-  text-align: center;
-  text-decoration: none;
-  white-space: nowrap;
-  transition:
-    background-color 0.18s ease,
-    color 0.18s ease,
-    box-shadow 0.18s ease;
-}
-
-.modeSwitchTab:hover {
-  color: var(--inspect-ink);
-  background: color-mix(in srgb, var(--inspect-accent) 6%, var(--inspect-surface));
-}
-
-.modeSwitchTabActive,
-.modeSwitchTabActive:hover {
-  color: var(--inspect-accent-strong);
-  background: var(--inspect-surface);
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);
-}
-
 .modeSwitchCopy {
   display: grid;
   gap: 4px;
@@ -737,6 +693,60 @@
   min-width: 0;
   max-width: 100%;
   overflow-x: auto;
+}
+
+.resultPaginationBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--inspect-line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--inspect-surface-muted) 62%, var(--inspect-surface));
+}
+
+.resultPaginationInfo {
+  min-width: 0;
+  color: var(--inspect-muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.resultPaginationControls {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.resultPageSizeField {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  color: var(--inspect-muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.resultPageSizeSelect {
+  width: 118px;
+  flex: 0 0 auto;
+}
+
+.resultPageSizeSelectTrigger {
+  min-width: 96px;
+  height: 32px !important;
+  padding: 0 2px 0 10px !important;
+  border-radius: 10px !important;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .table {
@@ -2023,22 +2033,21 @@
   .settingsAutoCards {
     grid-template-columns: 1fr;
   }
+
+  .resultPaginationBar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .resultPaginationControls {
+    justify-content: flex-start;
+    width: 100%;
+  }
 }
 
 @container codex-inspection-page (max-width: 640px) {
   .modeSwitchPanel {
     border-radius: 16px;
-  }
-
-  .modeSwitchTabs {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    width: 100%;
-  }
-
-  .modeSwitchTab {
-    min-width: 0;
-    padding: 0 10px;
   }
 
   .panel,
@@ -2061,6 +2070,17 @@
 
   .logRow {
     grid-template-columns: 1fr;
+  }
+
+  .resultPaginationControls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .resultPageSizeField,
+  .resultPageSizeSelect,
+  .resultPageSizeSelectTrigger {
+    width: 100%;
   }
 
   .settingsField,

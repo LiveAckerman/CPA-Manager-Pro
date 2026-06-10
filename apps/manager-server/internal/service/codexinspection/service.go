@@ -1032,10 +1032,27 @@ func (l runLogger) log(ctx context.Context, level string, message string, detail
 }
 
 func resolveProbeAction(item account, statusCode int, bodyText string, rateLimit *codexRateLimit, usedPercent *float64, isQuota bool, threshold float64) inspectionDecision {
+	if isDeactivatedWorkspaceResponse(statusCode, bodyText) {
+		return resolveDeactivatedWorkspaceProbeAction(usedPercent)
+	}
 	if decision := resolveWindowAwareProbeAction(item, statusCode, bodyText, rateLimit, threshold); decision != nil {
 		return *decision
 	}
 	return resolveLegacyProbeAction(item, statusCode, bodyText, usedPercent, isQuota, threshold)
+}
+
+func isDeactivatedWorkspaceResponse(statusCode int, bodyText string) bool {
+	return statusCode == http.StatusPaymentRequired &&
+		strings.Contains(strings.ToLower(bodyText), "deactivated_workspace")
+}
+
+func resolveDeactivatedWorkspaceProbeAction(usedPercent *float64) inspectionDecision {
+	return inspectionDecision{
+		Action:       "delete",
+		ActionReason: "接口返回 402，工作区已停用，建议删除账号",
+		UsedPercent:  usedPercent,
+		IsQuota:      false,
+	}
 }
 
 func resolveWindowAwareProbeAction(item account, statusCode int, bodyText string, rateLimit *codexRateLimit, threshold float64) *inspectionDecision {

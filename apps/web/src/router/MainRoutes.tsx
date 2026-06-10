@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
-import { Navigate, useRoutes, type Location } from 'react-router-dom';
+import { Navigate, useLocation, useRoutes, type Location } from 'react-router-dom';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { AiProvidersPage } from '@/pages/AiProvidersPage';
 import { AiProvidersAmpcodeEditPage } from '@/pages/AiProvidersAmpcodeEditPage';
@@ -27,7 +27,7 @@ import { SystemPage } from '@/pages/SystemPage';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { CodexInspectionModeTabs } from '@/features/monitoring/components/CodexInspectionModeTabs';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
-import { isFileLogsAvailable } from '@/features/logs/logFeatureAvailability';
+import { isLogsRouteAvailable } from '@/features/logs/logFeatureAvailability';
 import { useConfigStore } from '@/stores';
 import codexInspectionStyles from '@/features/monitoring/CodexInspectionPage.module.scss';
 
@@ -105,6 +105,7 @@ function ServerCodexInspectionRouteFallback() {
 }
 
 function LogsGate({ children }: { children: ReactElement }) {
+  const location = useLocation();
   const config = useConfigStore((state) => state.config);
   const fetchConfig = useConfigStore((state) => state.fetchConfig);
   const requestedRef = useRef(false);
@@ -120,7 +121,7 @@ function LogsGate({ children }: { children: ReactElement }) {
     return <LoadingSpinner />;
   }
 
-  if (!isFileLogsAvailable(config)) {
+  if (!isLogsRouteAvailable(config, location.search)) {
     return <Navigate to="/config" replace />;
   }
 

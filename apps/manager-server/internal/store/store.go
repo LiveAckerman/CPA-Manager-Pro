@@ -285,8 +285,12 @@ func (s *Store) RecentFailuresWithFilter(ctx context.Context, filter AnalyticsFi
 	return s.UsageEvents.RecentFailuresWithFilter(ctx, filter, limit)
 }
 
-func (s *Store) EventsPageWithFilter(ctx context.Context, filter AnalyticsFilter, beforeMS int64, limit int) (EventsPage, error) {
-	return s.UsageEvents.EventsPageWithFilter(ctx, filter, beforeMS, limit)
+func (s *Store) EventsPageWithFilter(ctx context.Context, filter AnalyticsFilter, beforeMS int64, beforeID int64, limit int) (EventsPage, error) {
+	return s.UsageEvents.EventsPageWithFilter(ctx, filter, beforeMS, beforeID, limit)
+}
+
+func (s *Store) EventsCountWithFilter(ctx context.Context, filter AnalyticsFilter) (int64, error) {
+	return s.UsageEvents.EventsCountWithFilter(ctx, filter)
 }
 
 func (s *Store) ActiveDaysWithFilter(ctx context.Context, filter AnalyticsFilter) (int64, error) {

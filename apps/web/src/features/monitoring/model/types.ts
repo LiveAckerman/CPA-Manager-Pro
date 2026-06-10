@@ -374,6 +374,8 @@ export interface UseMonitoringDataReturn {
   filteredRows: MonitoringEventRow[];
   eventsHasMore: boolean;
   eventsLoadingMore: boolean;
+  eventsTotalCount: number;
+  eventsLoadedCount: number;
   lastRefreshedAt: Date | null;
   isTransitioningScope: boolean;
   hasPresentationSnapshot: boolean;

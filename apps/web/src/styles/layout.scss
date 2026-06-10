@@ -535,7 +535,14 @@
   :root {
     --sidebar-panel-width: min(280px, calc(100vw - 24px));
     --sidebar-active-width: 0px;
+    --sidebar-bg-color: rgba(255, 255, 255, 0.94);
+    --sidebar-logo-bg-color: rgba(255, 255, 255, 0.88);
     --floating-control-size: 34px;
+  }
+
+  [data-theme='dark'] {
+    --sidebar-bg-color: rgba(24, 28, 40, 0.92);
+    --sidebar-logo-bg-color: rgba(24, 28, 40, 0.86);
   }
 
   .app-shell,

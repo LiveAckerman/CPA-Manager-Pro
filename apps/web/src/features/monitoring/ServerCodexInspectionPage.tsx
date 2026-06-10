@@ -19,7 +19,10 @@ import { Panel } from '@/features/monitoring/components/CodexInspectionPanels';
 import { InspectionConfigDrawer } from '@/features/monitoring/components/InspectionConfigDrawer';
 import { InspectionConfigFields } from '@/features/monitoring/components/InspectionConfigFields';
 import {
+  CODEX_INSPECTION_RESULT_PAGE_SIZE_OPTIONS,
+  buildCodexInspectionPaginationState,
   buildConfigOverviewItems,
+  type CodexInspectionPaginationState,
   type CodexInspectionSummaryAccent,
   formatActionLabel,
   formatPercent,
@@ -112,6 +115,15 @@ type ServerCodexInspectionResultFilter =
   | 'reauth'
   | 'http_401'
   | 'keep';
+
+const filterServerCodexInspectionResults = (
+  results: CodexInspectionResult[],
+  filter: ServerCodexInspectionResultFilter
+) => {
+  if (filter === 'all') return results;
+  if (filter === 'http_401') return results.filter((item) => item.statusCode === 401);
+  return results.filter((item) => item.action === filter);
+};
 
 const COMMON_TIME_ZONES: ReadonlyArray<string> = [
   'UTC',
@@ -535,6 +547,10 @@ export function ServerCodexInspectionPage() {
   const [error, setError] = useState('');
   const [logsCollapsed, setLogsCollapsed] = useState(false);
   const [resultFilter, setResultFilter] = useState<ServerCodexInspectionResultFilter>('all');
+  const [resultPage, setResultPage] = useState(1);
+  const [resultPageSize, setResultPageSize] = useState<number>(
+    CODEX_INSPECTION_RESULT_PAGE_SIZE_OPTIONS[0]
+  );
   const [logLevelFilter, setLogLevelFilter] = useState<'all' | 'info' | 'success' | 'warning' | 'error'>('all');
   const [executingResultIds, setExecutingResultIds] = useState<Set<number>>(() => new Set());
   const [executingAllActions, setExecutingAllActions] = useState(false);
@@ -643,6 +659,30 @@ export function ServerCodexInspectionPage() {
       activeRun.enableCount +
       (activeRun.reauthCount ?? 0)
     : 0;
+
+  const resultRows = useMemo(() => detail?.results ?? [], [detail?.results]);
+  const filteredResultRows = useMemo(
+    () => filterServerCodexInspectionResults(resultRows, resultFilter),
+    [resultRows, resultFilter]
+  );
+  const resultPagination = useMemo(
+    () => buildCodexInspectionPaginationState(filteredResultRows, resultPage, resultPageSize),
+    [filteredResultRows, resultPage, resultPageSize]
+  );
+
+  useEffect(() => {
+    setResultPage(1);
+  }, [resultFilter, detail?.run.id]);
+
+  useEffect(() => {
+    if (resultPage === resultPagination.currentPage) return;
+    setResultPage(resultPagination.currentPage);
+  }, [resultPage, resultPagination.currentPage]);
+
+  const handleResultPageSizeChange = useCallback((pageSize: number) => {
+    setResultPageSize(pageSize);
+    setResultPage(1);
+  }, []);
 
   const scheduleOptions = useMemo(
     () => [
@@ -1326,7 +1366,11 @@ export function ServerCodexInspectionPage() {
     </Panel>
   );
 
-  const renderResultsPanel = (results: CodexInspectionResult[]) => {
+  const renderResultsPanel = (
+    results: CodexInspectionResult[],
+    filtered: CodexInspectionResult[],
+    pagination: CodexInspectionPaginationState<CodexInspectionResult>
+  ) => {
     const canonicalExecutableIds = getCanonicalServerCodexInspectionActionIds(results);
     const mixedActionIds = getMixedServerCodexInspectionActionIds(results);
     const executableResults = results.filter((item) => canonicalExecutableIds.has(item.id));
@@ -1362,12 +1406,6 @@ export function ServerCodexInspectionPage() {
       { value: 'http_401', label: t('monitoring.codex_inspection_filter_401') },
       { value: 'keep', label: t('monitoring.codex_inspection_action_keep') },
     ];
-    const filtered =
-      resultFilter === 'all'
-        ? results
-        : resultFilter === 'http_401'
-          ? results.filter((item) => item.statusCode === 401)
-          : results.filter((item) => item.action === resultFilter);
     return (
       <Panel
         title={t('monitoring.codex_inspection_results_title')}
@@ -1412,117 +1450,172 @@ export function ServerCodexInspectionPage() {
         }
       >
         {filtered.length > 0 ? (
-          <div className={styles.tableWrap}>
-            <table className={styles.table}>
-              <colgroup>
-                <col className={styles.accountColumn} />
-                <col className={styles.stateColumn} />
-                <col className={styles.httpColumn} />
-                <col className={styles.usageColumn} />
-                <col className={styles.actionColumn} />
-                <col className={styles.operationColumn} />
-              </colgroup>
-              <thead>
-                <tr>
-                  <th>{t('monitoring.account_label')}</th>
-                  <th>{formatResultStateHeader(resultsRun, t)}</th>
-                  <th>{t('monitoring.codex_inspection_http_status')}</th>
-                  <th>{t('monitoring.codex_inspection_used_percent')}</th>
-                  <th>{t('monitoring.codex_inspection_next_action')}</th>
-                  <th>{t('monitoring.server_codex_inspection_results_state_detail')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((item) => {
-                  const actionStatus = normalizeServerCodexInspectionActionStatus(item);
-                  return (
-                  <tr key={item.id || item.accountKey}>
-                    <td>
-                      <div className={styles.primaryCell}>
-                        <span className={styles.primaryAccount}>{item.displayAccount}</span>
-                        <small className={styles.primaryFile}>
-                          {item.fileName}
-                          {item.authIndex ? (
-                            <span className={styles.primaryIndex}>{` · #${item.authIndex}`}</span>
-                          ) : null}
-                        </small>
-                        {item.actionReason ? (
-                          <small className={styles.primaryReason}>{item.actionReason}</small>
-                        ) : null}
-                      </div>
-                    </td>
-                    <td>
-                      <span
-                        className={`${styles.stateChip} ${
-                          item.disabled ? styles.stateDisabled : styles.stateEnabled
-                        }`}
-                      >
-                        {item.disabled
-                          ? t('monitoring.codex_inspection_state_disabled')
-                          : t('monitoring.codex_inspection_state_enabled')}
-                      </span>
-                    </td>
-                    <td className={styles.monoCell}>{item.statusCode ?? '--'}</td>
-                    <td className={styles.monoCell}>{formatPercent(item.usedPercent ?? null)}</td>
-                    <td>
-                      <span className={`${styles.actionBadge} ${actionToneClass[item.action] ?? styles.actionKeep}`}>
-                        {resolveActionLabel(item.action, t)}
-                      </span>
-                    </td>
-                    <td>
-                      <div className={styles.serverResultOperation}>
-                        {(() => {
-                          const statusLabel = formatServerActionStatusLabel(item, t);
-                          const detailText =
-                            item.actionError || item.error || item.status || item.state || '--';
-                          return (
-                            <span
-                              className={
-                                actionStatus === 'failed' || item.actionError || item.error
-                                  ? styles.primaryError
-                                  : styles.primaryReason
-                              }
-                            >
-                              {statusLabel ? `${statusLabel} · ${detailText}` : detailText}
-                            </span>
-                          );
-                        })()}
-                        {canonicalExecutableIds.has(item.id) ? (
-                          <Button
-                            size="xs"
-                            variant={item.action === 'delete' ? 'danger' : 'secondary'}
-                            loading={executingResultIds.has(item.id)}
-                            disabled={!canExecuteActions || executingResultIds.size > 0}
-                            className={styles.serverResultActionButton}
-                            onClick={() => handleExecuteServerActions([item], 'single')}
-                          >
-                            {(() => {
-                              const ActionIcon = getServerActionIcon(item.action);
-                              return <ActionIcon size={13} />;
-                            })()}
-                            {resolveActionLabel(item.action, t)}
-                          </Button>
-                        ) : actionStatus === 'needs_review' || mixedActionIds.has(item.id) ? (
-                          <span className={styles.primaryReason}>
-                            {t('monitoring.server_codex_inspection_action_needs_review_hint')}
-                          </span>
-                        ) : isActionableServerCodexInspectionResult(item) ? (
-                          <span className={styles.primaryReason}>
-                            {t('monitoring.server_codex_inspection_file_level_action_hint')}
-                          </span>
-                        ) : item.action === 'reauth' ? (
-                          <span className={styles.primaryReason}>
-                            {t('monitoring.codex_inspection_manual_required')}
-                          </span>
-                        ) : null}
-                      </div>
-                    </td>
+          <>
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
+                <colgroup>
+                  <col className={styles.accountColumn} />
+                  <col className={styles.stateColumn} />
+                  <col className={styles.httpColumn} />
+                  <col className={styles.usageColumn} />
+                  <col className={styles.actionColumn} />
+                  <col className={styles.operationColumn} />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>{t('monitoring.account_label')}</th>
+                    <th>{formatResultStateHeader(resultsRun, t)}</th>
+                    <th>{t('monitoring.codex_inspection_http_status')}</th>
+                    <th>{t('monitoring.codex_inspection_used_percent')}</th>
+                    <th>{t('monitoring.codex_inspection_next_action')}</th>
+                    <th>{t('monitoring.server_codex_inspection_results_state_detail')}</th>
                   </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {pagination.pageItems.map((item) => {
+                    const actionStatus = normalizeServerCodexInspectionActionStatus(item);
+                    return (
+                    <tr key={item.id || item.accountKey}>
+                      <td>
+                        <div className={styles.primaryCell}>
+                          <span className={styles.primaryAccount}>{item.displayAccount}</span>
+                          <small className={styles.primaryFile}>
+                            {item.fileName}
+                            {item.authIndex ? (
+                              <span className={styles.primaryIndex}>{` · #${item.authIndex}`}</span>
+                            ) : null}
+                          </small>
+                          {item.actionReason ? (
+                            <small className={styles.primaryReason}>{item.actionReason}</small>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td>
+                        <span
+                          className={`${styles.stateChip} ${
+                            item.disabled ? styles.stateDisabled : styles.stateEnabled
+                          }`}
+                        >
+                          {item.disabled
+                            ? t('monitoring.codex_inspection_state_disabled')
+                            : t('monitoring.codex_inspection_state_enabled')}
+                        </span>
+                      </td>
+                      <td className={styles.monoCell}>{item.statusCode ?? '--'}</td>
+                      <td className={styles.monoCell}>{formatPercent(item.usedPercent ?? null)}</td>
+                      <td>
+                        <span className={`${styles.actionBadge} ${actionToneClass[item.action] ?? styles.actionKeep}`}>
+                          {resolveActionLabel(item.action, t)}
+                        </span>
+                      </td>
+                      <td>
+                        <div className={styles.serverResultOperation}>
+                          {(() => {
+                            const statusLabel = formatServerActionStatusLabel(item, t);
+                            const detailText =
+                              item.actionError || item.error || item.status || item.state || '--';
+                            return (
+                              <span
+                                className={
+                                  actionStatus === 'failed' || item.actionError || item.error
+                                    ? styles.primaryError
+                                    : styles.primaryReason
+                                }
+                              >
+                                {statusLabel ? `${statusLabel} · ${detailText}` : detailText}
+                              </span>
+                            );
+                          })()}
+                          {canonicalExecutableIds.has(item.id) ? (
+                            <Button
+                              size="xs"
+                              variant={item.action === 'delete' ? 'danger' : 'secondary'}
+                              loading={executingResultIds.has(item.id)}
+                              disabled={!canExecuteActions || executingResultIds.size > 0}
+                              className={styles.serverResultActionButton}
+                              onClick={() => handleExecuteServerActions([item], 'single')}
+                            >
+                              {(() => {
+                                const ActionIcon = getServerActionIcon(item.action);
+                                return <ActionIcon size={13} />;
+                              })()}
+                              {resolveActionLabel(item.action, t)}
+                            </Button>
+                          ) : actionStatus === 'needs_review' || mixedActionIds.has(item.id) ? (
+                            <span className={styles.primaryReason}>
+                              {t('monitoring.server_codex_inspection_action_needs_review_hint')}
+                            </span>
+                          ) : isActionableServerCodexInspectionResult(item) ? (
+                            <span className={styles.primaryReason}>
+                              {t('monitoring.server_codex_inspection_file_level_action_hint')}
+                            </span>
+                          ) : item.action === 'reauth' ? (
+                            <span className={styles.primaryReason}>
+                              {t('monitoring.codex_inspection_manual_required')}
+                            </span>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {pagination.totalPages > 1 ? (
+              <div className={styles.resultPaginationBar}>
+                <div className={styles.resultPaginationInfo}>
+                  {t('monitoring.pagination_info', {
+                    current: pagination.currentPage,
+                    total: pagination.totalPages,
+                    start: pagination.startItem,
+                    end: pagination.endItem,
+                    count: pagination.count,
+                  })}
+                </div>
+                <div className={styles.resultPaginationControls}>
+                  <div className={styles.resultPageSizeField}>
+                    <span>{t('monitoring.page_size_label')}</span>
+                    <Select
+                      className={styles.resultPageSizeSelect}
+                      triggerClassName={styles.resultPageSizeSelectTrigger}
+                      value={String(resultPageSize)}
+                      options={CODEX_INSPECTION_RESULT_PAGE_SIZE_OPTIONS.map((size) => ({
+                        value: String(size),
+                        label: t('monitoring.page_size_option', { count: size }),
+                      }))}
+                      onChange={(value) => {
+                        const parsed = Number.parseInt(value, 10);
+                        handleResultPageSizeChange(
+                          Number.isFinite(parsed) && parsed > 0 ? parsed : resultPageSize
+                        );
+                      }}
+                      ariaLabel={t('monitoring.page_size_label')}
+                      fullWidth={false}
+                    />
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setResultPage(Math.max(1, pagination.currentPage - 1))}
+                    disabled={pagination.currentPage <= 1}
+                  >
+                    {t('monitoring.pagination_prev')}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() =>
+                      setResultPage(Math.min(pagination.totalPages, pagination.currentPage + 1))
+                    }
+                    disabled={pagination.currentPage >= pagination.totalPages}
+                  >
+                    {t('monitoring.pagination_next')}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </>
         ) : results.length === 0 ? (
           <div className={styles.emptyAction}>
             <span>{t('monitoring.codex_inspection_empty')}</span>
@@ -1685,7 +1778,7 @@ export function ServerCodexInspectionPage() {
         {renderRunsPanel()}
         <div className={styles.serverDetailPanels}>
           {detail?.run.error ? <div className={styles.serverError} role="alert">{detail.run.error}</div> : null}
-          {renderResultsPanel(detail?.results ?? [])}
+          {renderResultsPanel(resultRows, filteredResultRows, resultPagination)}
           {renderLogsPanel(detail?.logs ?? [])}
         </div>
       </div>

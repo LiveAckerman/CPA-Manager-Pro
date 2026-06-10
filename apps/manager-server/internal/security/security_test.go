@@ -25,6 +25,19 @@ func TestAdminCredentialVerifiesOnlyAdminKey(t *testing.T) {
 	}
 }
 
+func TestGenerateAdminKeyUsesExpectedPrefixAndEntropyLength(t *testing.T) {
+	adminKey, err := GenerateAdminKey()
+	if err != nil {
+		t.Fatalf("generate admin key: %v", err)
+	}
+	if !strings.HasPrefix(adminKey, "cmp_admin_") {
+		t.Fatalf("admin key = %q", adminKey)
+	}
+	if got, want := len(strings.TrimPrefix(adminKey, "cmp_admin_")), 43; got != want {
+		t.Fatalf("encoded random length = %d, want %d", got, want)
+	}
+}
+
 func TestProtectorEncryptsAndDecryptsString(t *testing.T) {
 	protector, err := NewProtector([]byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {

@@ -364,21 +364,6 @@
     white-space: nowrap;
   }
 
-  .accountEnabledControl {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 8px;
-    min-width: max-content;
-  }
-
-  .accountEnabledLabel {
-    color: var(--monitor-muted);
-    font-size: 12px;
-    font-weight: 700;
-    white-space: nowrap;
-  }
-
   .accountMetaRow {
     display: flex;
     align-items: center;
@@ -404,99 +389,6 @@
 
   .accountMetaSeparator {
     color: var(--monitor-muted);
-  }
-
-  .accountOverviewToggleRow {
-    display: flex;
-    align-items: flex-start;
-    justify-content: flex-start;
-    gap: 12px;
-    flex-wrap: wrap;
-    padding: 12px 14px;
-    border: 1px solid color-mix(in srgb, var(--monitor-line) 82%, transparent);
-    border-radius: 18px;
-    background: color-mix(in srgb, var(--monitor-surface-elevated) 84%, var(--monitor-surface));
-  }
-
-  .accountOverviewToggleMeta,
-  .accountOverviewToggleMetaRow {
-    display: grid;
-    gap: 6px;
-    min-width: 0;
-  }
-
-  .accountOverviewToggleMetaRow {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .accountOverviewToggleLabel,
-  .accountOverviewStatusLabel {
-    color: var(--monitor-muted);
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0;
-    text-transform: uppercase;
-  }
-
-  .accountOverviewStatusLabel {
-    display: none;
-  }
-
-  .accountOverviewToggleActions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .accountOverviewEnabledStateBadge,
-  .accountOverviewLinkedFilesMeta,
-  .accountOverviewStatusPill {
-    display: inline-flex;
-    align-items: center;
-    min-height: 28px;
-    padding: 0 10px;
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 700;
-    white-space: nowrap;
-  }
-
-  .accountOverviewEnabledStateBadge {
-    border: 1px solid transparent;
-  }
-
-  .accountOverviewEnabledStateEnabled {
-    color: var(--success-badge-text, #065f46);
-    background: var(--success-badge-bg, #d1fae5);
-    border-color: var(--success-badge-border, #6ee7b7);
-  }
-
-  .accountOverviewEnabledStateDisabled {
-    color: var(--text-secondary);
-    background: color-mix(in srgb, var(--surface-subtle) 84%, transparent);
-    border-color: var(--monitor-line);
-  }
-
-  .accountOverviewEnabledStateMixed {
-    color: var(--warning-text);
-    background: var(--warning-bg);
-    border-color: var(--warning-border);
-  }
-
-  .accountOverviewEnabledStateUnavailable {
-    color: var(--monitor-muted);
-    background: color-mix(in srgb, var(--monitor-surface-elevated) 82%, var(--monitor-surface));
-    border-color: color-mix(in srgb, var(--monitor-line) 90%, transparent);
-  }
-
-  .accountOverviewLinkedFilesMeta {
-    color: var(--monitor-muted);
-    background: color-mix(in srgb, var(--monitor-surface-elevated) 82%, var(--monitor-surface));
-    border: 1px solid color-mix(in srgb, var(--monitor-line) 90%, transparent);
   }
 
   .accountOverviewStatusSection,

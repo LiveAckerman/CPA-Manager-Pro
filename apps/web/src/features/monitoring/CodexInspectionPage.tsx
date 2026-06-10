@@ -33,6 +33,8 @@ import { CodexInspectionStatusPanel } from '@/features/monitoring/components/Cod
 import { InspectionConfigDrawer } from '@/features/monitoring/components/InspectionConfigDrawer';
 import { InspectionConfigFields } from '@/features/monitoring/components/InspectionConfigFields';
 import {
+  CODEX_INSPECTION_RESULT_PAGE_SIZE_OPTIONS,
+  buildCodexInspectionPaginationState,
   countActions,
   createCompletedProgressSnapshot,
   createIdleProgressSnapshot,
@@ -105,6 +107,10 @@ export function CodexInspectionPage() {
   const [executing, setExecuting] = useState(false);
   const [actionFilter, setActionFilter] = useState<ActionFilter>(
     () => initialLastRun?.actionFilter ?? 'all'
+  );
+  const [resultPage, setResultPage] = useState(1);
+  const [resultPageSize, setResultPageSize] = useState<number>(
+    CODEX_INSPECTION_RESULT_PAGE_SIZE_OPTIONS[0]
   );
   const logCounterRef = useRef(initialLastRun?.logs.length ?? 0);
   const sessionRef = useRef<CodexInspectionSession | null>(null);
@@ -493,6 +499,25 @@ export function CodexInspectionPage() {
     [suggestedResults, actionFilter]
   );
 
+  const resultPagination = useMemo(
+    () => buildCodexInspectionPaginationState(filteredResults, resultPage, resultPageSize),
+    [filteredResults, resultPage, resultPageSize]
+  );
+
+  useEffect(() => {
+    setResultPage(1);
+  }, [actionFilter, result?.startedAt, result?.finishedAt]);
+
+  useEffect(() => {
+    if (resultPage === resultPagination.currentPage) return;
+    setResultPage(resultPagination.currentPage);
+  }, [resultPage, resultPagination.currentPage]);
+
+  const handleResultPageSizeChange = useCallback((pageSize: number) => {
+    setResultPageSize(pageSize);
+    setResultPage(1);
+  }, []);
+
   const handleExecutePlanned = useCallback(() => {
     if (!result) return;
 
@@ -876,15 +901,20 @@ export function CodexInspectionPage() {
 
       <CodexInspectionResultsPanel
         result={result}
-        filteredResults={filteredResults}
+        filteredResults={resultPagination.pageItems}
         suggestedResults={suggestedResults}
         pendingActionCount={pendingActionCount}
         filterCounts={filterCounts}
         actionFilter={actionFilter}
+        pagination={resultPagination}
+        pageSize={resultPageSize}
+        pageSizeOptions={CODEX_INSPECTION_RESULT_PAGE_SIZE_OPTIONS}
         executing={executing}
         isInspectionInFlight={isInspectionInFlight}
         t={t}
         onActionFilterChange={setActionFilter}
+        onPageChange={setResultPage}
+        onPageSizeChange={handleResultPageSizeChange}
         onExecutePlanned={handleExecutePlanned}
         onExecuteSingle={handleExecuteSingle}
         filterLabel={filterLabel}

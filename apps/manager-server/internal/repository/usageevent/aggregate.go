@@ -25,6 +25,7 @@ type Aggregate struct {
 type ModelStat struct {
 	Model               string
 	BillingModel        string
+	ServiceTier         string
 	Calls               int64
 	SuccessCalls        int64
 	InputTokens         int64
@@ -109,6 +110,7 @@ const topModelsSQL = `with top_models as (
 select
 	e.model,
 	coalesce(nullif(e.resolved_model, ''), e.model) as billing_model,
+	coalesce(e.service_tier, '') as service_tier,
 	count(*) as calls,
 	sum(case when e.failed = 0 then 1 else 0 end) as success,
 	coalesce(sum(e.input_tokens), 0),
@@ -121,7 +123,7 @@ select
 from usage_events e
 join top_models t on t.model = e.model
 where e.timestamp_ms >= ? and e.timestamp_ms < ?
-group by e.model, billing_model
+group by e.model, billing_model, coalesce(e.service_tier, '')
 order by max(t.model_calls) desc, e.model, calls desc`
 
 // TopModelsBetween returns the most active models ordered by call count.
@@ -141,6 +143,7 @@ func (r *repository) TopModelsBetween(ctx context.Context, fromMs, toMs int64, l
 		if err := rows.Scan(
 			&stat.Model,
 			&stat.BillingModel,
+			&stat.ServiceTier,
 			&stat.Calls,
 			&stat.SuccessCalls,
 			&stat.InputTokens,
@@ -161,6 +164,7 @@ func (r *repository) TopModelsBetween(ctx context.Context, fromMs, toMs int64, l
 const modelStatsSQL = `select
 	model,
 	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	coalesce(service_tier, '') as service_tier,
 	count(*) as calls,
 	sum(case when failed = 0 then 1 else 0 end) as success,
 	coalesce(sum(input_tokens), 0),
@@ -172,7 +176,7 @@ const modelStatsSQL = `select
 	coalesce(sum(total_tokens), 0)
 from usage_events
 where timestamp_ms >= ? and timestamp_ms < ?
-group by model, billing_model
+group by model, billing_model, coalesce(service_tier, '')
 order by calls desc`
 
 // ModelStatsBetween returns per-model totals for all models in a window.
@@ -189,6 +193,7 @@ func (r *repository) ModelStatsBetween(ctx context.Context, fromMs, toMs int64) 
 		if err := rows.Scan(
 			&stat.Model,
 			&stat.BillingModel,
+			&stat.ServiceTier,
 			&stat.Calls,
 			&stat.SuccessCalls,
 			&stat.InputTokens,

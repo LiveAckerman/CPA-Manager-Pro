@@ -40,6 +40,7 @@ export type AccountQuotaState = {
 export type AccountSummaryMetric = {
   key: string;
   label: string;
+  fullLabel?: string;
   value: string;
   valueClassName?: string;
 };
@@ -51,6 +52,12 @@ const joinShort = (values: string[], limit = 2) => {
     return values.join(', ');
   }
   return `${values.slice(0, limit).join(', ')} +${values.length - limit}`;
+};
+
+const shortLabel = (t: TFunction, shortKey: string, fallbackKey: string) => {
+  const fallback = t(fallbackKey);
+  const label = t(shortKey, { defaultValue: fallback });
+  return label === shortKey ? fallback : label;
 };
 
 export const getCodexPlanLabel = (
@@ -96,49 +103,74 @@ export const buildAccountSummaryMetrics = (
 ): AccountSummaryMetric[] => [
   {
     key: 'total-calls',
-    label: t('monitoring.total_calls'),
+    label: shortLabel(t, 'monitoring.total_calls_short', 'monitoring.total_calls'),
+    fullLabel: t('monitoring.total_calls'),
     value: formatCompactNumber(row.totalCalls),
   },
   {
     key: 'success-calls',
-    label: t('monitoring.success_calls'),
+    label: shortLabel(t, 'monitoring.success_calls_short', 'monitoring.success_calls'),
+    fullLabel: t('monitoring.success_calls'),
     value: formatCompactNumber(row.successCalls),
     valueClassName: styles.goodText,
   },
   {
     key: 'failure-calls',
-    label: t('monitoring.failure_calls'),
+    label: shortLabel(t, 'monitoring.failure_calls_short', 'monitoring.failure_calls'),
+    fullLabel: t('monitoring.failure_calls'),
     value: formatCompactNumber(row.failureCalls),
     valueClassName: row.failureCalls > 0 ? styles.badText : undefined,
   },
   {
     key: 'total-tokens',
-    label: t('monitoring.total_tokens'),
+    label: shortLabel(t, 'monitoring.total_tokens_short', 'monitoring.total_tokens'),
+    fullLabel: t('monitoring.total_tokens'),
     value: formatCompactNumber(row.totalTokens),
   },
   {
     key: 'input-tokens',
-    label: t('monitoring.input_tokens'),
+    label: shortLabel(t, 'monitoring.input_tokens_short', 'monitoring.input_tokens'),
+    fullLabel: t('monitoring.input_tokens'),
     value: formatCompactNumber(row.inputTokens),
   },
   {
     key: 'output-tokens',
-    label: t('monitoring.output_tokens'),
+    label: shortLabel(t, 'monitoring.output_tokens_short', 'monitoring.output_tokens'),
+    fullLabel: t('monitoring.output_tokens'),
     value: formatCompactNumber(row.outputTokens),
   },
   {
     key: 'cached-tokens',
-    label: t('monitoring.cached_tokens'),
+    label: shortLabel(t, 'monitoring.cached_tokens_short', 'monitoring.cached_tokens'),
+    fullLabel: t('monitoring.cached_tokens'),
     value: formatCompactNumber(row.cachedTokens),
   },
   {
+    key: 'cache-creation-tokens',
+    label: shortLabel(
+      t,
+      'monitoring.cache_creation_tokens_short',
+      'monitoring.cache_creation_tokens'
+    ),
+    fullLabel: t('monitoring.cache_creation_tokens'),
+    value: formatCompactNumber(row.cacheCreationTokens),
+  },
+  {
+    key: 'cache-read-tokens',
+    label: shortLabel(t, 'monitoring.cache_read_tokens_short', 'monitoring.cache_read_tokens'),
+    fullLabel: t('monitoring.cache_read_tokens'),
+    value: formatCompactNumber(row.cacheReadTokens),
+  },
+  {
     key: 'estimated-cost',
-    label: t('monitoring.estimated_cost'),
+    label: shortLabel(t, 'monitoring.estimated_cost_short', 'monitoring.estimated_cost'),
+    fullLabel: t('monitoring.estimated_cost'),
     value: hasPrices ? formatUsd(row.totalCost) : '--',
   },
   {
     key: 'latest-request-time',
-    label: t('monitoring.latest_request_time'),
+    label: shortLabel(t, 'monitoring.latest_request_time_short', 'monitoring.latest_request_time'),
+    fullLabel: t('monitoring.latest_request_time'),
     value: new Date(row.lastSeenAt).toLocaleString(locale),
   },
 ];

@@ -57,15 +57,34 @@ jobs:
         run: |
           set -euo pipefail
           current_tag="${GITHUB_REF_NAME}"
-          previous_tag="$(git tag --list 'v*' --sort=-v:refname | grep -v "^${current_tag}$" | head -n 1 || true)"
-          if [ -n "${previous_tag}" ]; then
-            range="${previous_tag}..${current_tag}"
-          else
-            range="${current_tag}"
-          fi
+          notes_dir="docs/release-notes"
 
-          : > release-notes.md
-          git log --pretty=format:"- %h %s" "${range}" >> release-notes.md
+          # Prefer curated notes: docs/release-notes/<tag>-<lang>.md (zh -> zh-CN -> en)
+          primary=""
+          for lang in zh zh-CN en; do
+            if [ -f "${notes_dir}/${current_tag}-${lang}.md" ]; then
+              primary="${notes_dir}/${current_tag}-${lang}.md"
+              break
+            fi
+          done
+
+          if [ -n "${primary}" ]; then
+            cp "${primary}" release-notes.md
+            echo "Using curated release notes: ${primary}"
+          else
+            # Fallback: auto-list commits in range (legacy behavior)
+            previous_tag="$(git tag --list 'v*' --sort=-v:refname | grep -v "^${current_tag}$" | head -n 1 || true)"
+            if [ -n "${previous_tag}" ]; then
+              range="${previous_tag}..${current_tag}"
+            else
+              range="${current_tag}"
+            fi
+
+            : > release-notes.md
+            git log --pretty=format:"- %h %s" "${range}" >> release-notes.md
+            echo "Looked for: ${notes_dir}/${current_tag}-{zh,zh-CN,en}.md"
+            echo "No curated notes for ${current_tag}; fell back to git log"
+          fi
 
       - name: Detect release type
         id: release_type

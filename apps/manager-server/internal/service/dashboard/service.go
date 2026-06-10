@@ -518,9 +518,9 @@ func buildChannelHealth(stats []store.ChannelModelStat, prices map[string]store.
 		entry.row.Failures += stat.FailureCalls
 		entry.row.Tokens += stat.TotalTokens
 		entry.row.Cost += costForChannelStat(stat, prices)
-		if stat.AvgLatencyMS.Valid {
-			entry.latencySum += stat.AvgLatencyMS.Float64
-			entry.latencyN++
+		if stat.AvgLatencyMS.Valid && stat.LatencySamples > 0 {
+			entry.latencySum += stat.AvgLatencyMS.Float64 * float64(stat.LatencySamples)
+			entry.latencyN += stat.LatencySamples
 		}
 	}
 
@@ -666,7 +666,7 @@ func costForStat(stat store.ModelStat, prices map[string]store.ModelPrice) float
 	if model == "" {
 		model = stat.Model
 	}
-	return pricing.CostForModel(model, pricing.ModelTokens{
+	return pricing.CostForModelWithServiceTier(model, stat.ServiceTier, pricing.ModelTokens{
 		InputTokens:         stat.InputTokens,
 		OutputTokens:        stat.OutputTokens,
 		CachedTokens:        stat.CachedTokens,
@@ -680,7 +680,7 @@ func costForChannelStat(stat store.ChannelModelStat, prices map[string]store.Mod
 	if model == "" {
 		model = stat.Model
 	}
-	return pricing.CostForModel(model, pricing.ModelTokens{
+	return pricing.CostForModelWithServiceTier(model, stat.ServiceTier, pricing.ModelTokens{
 		InputTokens:         stat.InputTokens,
 		OutputTokens:        stat.OutputTokens,
 		CachedTokens:        stat.CachedTokens,

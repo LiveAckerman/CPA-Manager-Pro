@@ -453,6 +453,32 @@ func TestResolveProbeActionUsesMonthlyWindowAsLongQuota(t *testing.T) {
 	item := account{DisplayAccount: "user@example.test"}
 	threshold := 100.0
 
+	t.Run("deletes deactivated workspace payment required response", func(t *testing.T) {
+		rateLimit := &codexRateLimit{
+			PrimaryWindow: &codexWindow{
+				UsedPercent:        ptrFloat(5),
+				LimitWindowSeconds: ptrFloat(codexMonthWindow),
+			},
+		}
+		decision := resolveProbeAction(
+			item,
+			http.StatusPaymentRequired,
+			`{"detail":{"code":"deactivated_workspace"}}`,
+			rateLimit,
+			deriveRateLimitUsedPercent(rateLimit),
+			true,
+			threshold,
+		)
+
+		if decision.Action != "delete" ||
+			decision.ActionReason != "接口返回 402，工作区已停用，建议删除账号" ||
+			decision.UsedPercent == nil ||
+			*decision.UsedPercent != 5 ||
+			decision.IsQuota {
+			t.Fatalf("decision = %#v, want delete deactivated workspace", decision)
+		}
+	})
+
 	t.Run("keeps healthy monthly quota", func(t *testing.T) {
 		rateLimit := &codexRateLimit{
 			PrimaryWindow: &codexWindow{
@@ -510,6 +536,42 @@ func TestResolveProbeActionUsesMonthlyWindowAsLongQuota(t *testing.T) {
 			t.Fatalf("decision = %#v, want keep exhausted short window with healthy monthly quota", decision)
 		}
 	})
+}
+
+func TestRunSuggestsDeleteForDeactivatedWorkspace(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"}]}`))
+		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+			_, _ = w.Write([]byte(`{"status_code":402,"body":{"detail":{"code":"deactivated_workspace"}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+
+	db := newCodexInspectionTestStore(t)
+	managerCfg := newCodexInspectionManagerConfig(upstream.URL)
+	managerCfg.CodexInspection.AutoActionMode = model.CodexInspectionAutoActionNone
+	if err := db.SaveManagerConfig(context.Background(), managerCfg); err != nil {
+		t.Fatalf("save manager config: %v", err)
+	}
+	svc := newCodexInspectionTestService(t, db)
+
+	result, err := svc.Run(context.Background(), RunRequest{TriggerType: "manual", TriggerKey: "manual"})
+	if err != nil {
+		t.Fatalf("run inspection: %v", err)
+	}
+	if result.Run.DeleteCount != 1 || result.Run.DisableCount != 0 || result.Run.KeepCount != 0 {
+		t.Fatalf("run counts delete=%d disable=%d keep=%d, want 1/0/0", result.Run.DeleteCount, result.Run.DisableCount, result.Run.KeepCount)
+	}
+	if len(result.Results) != 1 ||
+		result.Results[0].Action != "delete" ||
+		result.Results[0].ActionReason != "接口返回 402，工作区已停用，建议删除账号" ||
+		result.Results[0].IsQuota {
+		t.Fatalf("result = %#v, want delete deactivated workspace", result.Results)
+	}
 }
 
 func TestRunFallsBackToManagementAPICallPath(t *testing.T) {

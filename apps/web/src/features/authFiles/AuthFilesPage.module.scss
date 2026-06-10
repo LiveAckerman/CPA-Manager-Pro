@@ -249,7 +249,12 @@
 
 .filterControls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(88px, 120px) minmax(150px, 200px);
+  grid-template-columns:
+    minmax(0, 1fr)
+    minmax(88px, 120px)
+    minmax(150px, 200px)
+    minmax(170px, 220px)
+    minmax(150px, 200px);
   gap: 8px;
   align-items: flex-end;
   min-width: 0;
@@ -800,7 +805,8 @@
   }
 
   .typeBadge,
-  .stateBadge {
+  .stateBadge,
+  .codexStatusBadge {
     padding: 3px 7px;
     font-size: 10px;
   }
@@ -929,7 +935,7 @@
   font-weight: 700;
   line-height: 1;
   white-space: nowrap;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
 }
 
 .stateBadgeActive {
@@ -954,6 +960,38 @@
   color: var(--text-secondary);
   background: color-mix(in srgb, var(--surface-subtle) 82%, transparent);
   border: 1px dashed color-mix(in srgb, var(--border-subtle-dashed) 90%, transparent);
+}
+
+.codexStatusBadge {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  letter-spacing: 0;
+}
+
+.codexStatusBadgeDanger {
+  color: var(--danger-color);
+  background: color-mix(in srgb, var(--danger-color) 10%, var(--bg-primary));
+  border: 1px solid color-mix(in srgb, var(--danger-color) 42%, transparent);
+}
+
+.codexStatusBadgeWarning {
+  color: var(--warning-text);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+}
+
+.codexStatusBadgeInfo {
+  color: var(--primary-color);
+  background: var(--color-primary-light-9);
+  border: 1px solid var(--color-primary-light-7);
 }
 
 .fileName {
@@ -1628,6 +1666,22 @@
   font-weight: 600;
   color: var(--text-primary);
   margin-right: 2px;
+}
+
+.batchPriorityModal {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+
+  :global(.form-group) {
+    margin: 0;
+  }
+}
+
+.batchPriorityFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: $spacing-xs;
 }
 
 @include mobile {

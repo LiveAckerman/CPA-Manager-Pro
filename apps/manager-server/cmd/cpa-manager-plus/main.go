@@ -11,6 +11,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/collector"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/command/adminreset"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/cparuntime"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/httpapi"
@@ -22,6 +23,20 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "reset-admin-key", "reset-admin-password":
+			if err := adminreset.Run(context.Background(), os.Args[2:], os.Stdout, os.Stderr); err != nil {
+				log.Printf("reset admin key: %v", err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
+	runServer()
+}
+
+func runServer() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("load config: %v", err)

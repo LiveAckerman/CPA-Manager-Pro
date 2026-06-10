@@ -25,7 +25,13 @@ export interface UsageTokens {
   cached_tokens?: number;
   cache_tokens?: number;
   cache_read_tokens?: number;
+  cache_read_input_tokens?: number;
+  cacheReadInputTokens?: number;
   cache_creation_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cacheCreationInputTokens?: number;
+  cache_write_input_tokens?: number;
+  cacheWriteInputTokens?: number;
   total_tokens?: number;
 }
 
@@ -96,6 +102,20 @@ const BACKEND_MASKED_SOURCE_REGEX = /^m:(\*{4}|[^\s/\\]{4}\.\.\.[^\s/\\]{4})$/;
 const keyFingerprintCache = new Map<string, string>();
 const usageDetailsCache = new WeakMap<object, UsageDetail[]>();
 const usageDetailsWithEndpointCache = new WeakMap<object, UsageDetailWithEndpoint[]>();
+const CACHE_READ_TOKEN_KEYS = [
+  'cache_read_tokens',
+  'cacheReadTokens',
+  'cache_read_input_tokens',
+  'cacheReadInputTokens',
+] as const;
+const CACHE_CREATION_TOKEN_KEYS = [
+  'cache_creation_tokens',
+  'cacheCreationTokens',
+  'cache_creation_input_tokens',
+  'cacheCreationInputTokens',
+  'cache_write_input_tokens',
+  'cacheWriteInputTokens',
+] as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -103,6 +123,14 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const toFiniteNumber = (value: unknown): number => {
   const numberValue = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(numberValue) ? numberValue : 0;
+};
+
+const readFirstTokenNumber = (record: Record<string, unknown>, keys: readonly string[]): number => {
+  for (const key of keys) {
+    const value = toFiniteNumber(record[key]);
+    if (value !== 0) return value;
+  }
+  return 0;
 };
 
 const toPositiveNumber = (value: unknown): number | undefined => {
@@ -123,6 +151,28 @@ const readDetailString = (value: unknown): string | undefined => {
   const text = String(value).trim();
   return text || undefined;
 };
+
+const isModelFamily = (modelName: string, family: string): boolean =>
+  modelName === family || modelName.startsWith(`${family}-`);
+
+export function getServiceTierMultiplier(modelName: string, serviceTier?: string): number {
+  const tier = String(serviceTier ?? '')
+    .trim()
+    .toLowerCase();
+  if (tier !== 'priority' && tier !== 'fast') return 1;
+
+  const normalizedModel = String(modelName ?? '')
+    .trim()
+    .toLowerCase();
+  // OpenAI Priority pricing currently publishes tier multipliers for these
+  // model families. Keep this as a compatibility layer until model prices can
+  // be represented per tier, such as standard, priority, flex, and batch.
+  if (isModelFamily(normalizedModel, 'gpt-5.5')) return 2.5;
+  if (isModelFamily(normalizedModel, 'gpt-5.4-mini')) return 2;
+  if (isModelFamily(normalizedModel, 'gpt-5.4')) return 2;
+  if (isModelFamily(normalizedModel, 'gpt-5.3-codex')) return 2;
+  return 1;
+}
 
 export const compatibleCachedTokens = (
   cachedTokens: unknown,
@@ -295,10 +345,8 @@ export function extractTTFTMs(detail: unknown): number | null {
 
 const readTokens = (detail: Record<string, unknown>): UsageTokens => {
   const tokensRaw = isRecord(detail.tokens) ? detail.tokens : {};
-  const cacheReadTokens = toFiniteNumber(tokensRaw.cache_read_tokens ?? tokensRaw.cacheReadTokens);
-  const cacheCreationTokens = toFiniteNumber(
-    tokensRaw.cache_creation_tokens ?? tokensRaw.cacheCreationTokens
-  );
+  const cacheReadTokens = readFirstTokenNumber(tokensRaw, CACHE_READ_TOKEN_KEYS);
+  const cacheCreationTokens = readFirstTokenNumber(tokensRaw, CACHE_CREATION_TOKEN_KEYS);
   const cachedTokens = compatibleCachedTokens(
     tokensRaw.cached_tokens ?? tokensRaw.cachedTokens,
     tokensRaw.cache_tokens ?? tokensRaw.cacheTokens,
@@ -524,6 +572,8 @@ export function collectUsageDetailsWithEndpoint(usageData: unknown): UsageDetail
 export function extractTotalTokens(detail: unknown): number {
   const record = isRecord(detail) ? detail : null;
   const tokens = record && isRecord(record.tokens) ? record.tokens : {};
+  const cacheReadTokens = Math.max(readFirstTokenNumber(tokens, CACHE_READ_TOKEN_KEYS), 0);
+  const cacheCreationTokens = Math.max(readFirstTokenNumber(tokens, CACHE_CREATION_TOKEN_KEYS), 0);
   const explicitTotal = toFiniteNumber(tokens.total_tokens ?? tokens.totalTokens);
   if (explicitTotal > 0) return explicitTotal;
 
@@ -533,16 +583,8 @@ export function extractTotalTokens(detail: unknown): number {
   const cachedTokens = compatibleCachedTokens(
     tokens.cached_tokens ?? tokens.cachedTokens,
     tokens.cache_tokens ?? tokens.cacheTokens,
-    tokens.cache_read_tokens ?? tokens.cacheReadTokens,
-    tokens.cache_creation_tokens ?? tokens.cacheCreationTokens
-  );
-  const cacheReadTokens = Math.max(
-    toFiniteNumber(tokens.cache_read_tokens ?? tokens.cacheReadTokens),
-    0
-  );
-  const cacheCreationTokens = Math.max(
-    toFiniteNumber(tokens.cache_creation_tokens ?? tokens.cacheCreationTokens),
-    0
+    cacheReadTokens,
+    cacheCreationTokens
   );
 
   return (
@@ -556,12 +598,18 @@ export function extractTotalTokens(detail: unknown): number {
 }
 
 export function calculateCost(
-  detail: Pick<UsageDetail, 'tokens' | '__modelName' | '__resolvedModel'>,
+  detail: Pick<
+    UsageDetail,
+    'tokens' | '__modelName' | '__resolvedModel' | 'service_tier' | 'serviceTier'
+  >,
   modelPrices: Record<string, ModelPrice>
 ): number {
   const resolvedModel = detail.__resolvedModel || '';
   const requestedModel = detail.__modelName || '';
-  const price = modelPrices[resolvedModel] || modelPrices[requestedModel];
+  const resolvedPrice = resolvedModel ? modelPrices[resolvedModel] : undefined;
+  const requestedPrice = requestedModel ? modelPrices[requestedModel] : undefined;
+  const price = resolvedPrice || requestedPrice;
+  const pricedModel = resolvedPrice ? resolvedModel : requestedPrice ? requestedModel : '';
   if (!price) return 0;
 
   const inputTokens = Math.max(toFiniteNumber(detail.tokens.input_tokens), 0);
@@ -574,24 +622,28 @@ export function calculateCost(
   const cacheCreationTokens = Math.max(toFiniteNumber(detail.tokens.cache_creation_tokens), 0);
   const promptPrice = Number(price.prompt) || 0;
   const completionPrice = Number(price.completion) || 0;
+  let standardCost = 0;
   if (cacheReadTokens > 0 || cacheCreationTokens > 0) {
     const cacheReadPrice = Number(price.cacheRead) || Number(price.cache) || 0;
     const cacheCreationPrice = Number(price.cacheCreation) || promptPrice;
     const promptTokens = Math.max(inputTokens - cachedTokens, 0);
-    const total =
+    standardCost =
       (promptTokens / TOKENS_PER_PRICE_UNIT) * promptPrice +
       (completionTokens / TOKENS_PER_PRICE_UNIT) * completionPrice +
       (cachedTokens / TOKENS_PER_PRICE_UNIT) * (Number(price.cache) || 0) +
       (cacheReadTokens / TOKENS_PER_PRICE_UNIT) * cacheReadPrice +
       (cacheCreationTokens / TOKENS_PER_PRICE_UNIT) * cacheCreationPrice;
-    return Number.isFinite(total) && total > 0 ? total : 0;
+  } else {
+    const promptTokens = Math.max(inputTokens - cachedTokens, 0);
+    const promptCost = (promptTokens / TOKENS_PER_PRICE_UNIT) * promptPrice;
+    const completionCost = (completionTokens / TOKENS_PER_PRICE_UNIT) * completionPrice;
+    const cachedCost = (cachedTokens / TOKENS_PER_PRICE_UNIT) * (Number(price.cache) || 0);
+    standardCost = promptCost + cachedCost + completionCost;
   }
 
-  const promptTokens = Math.max(inputTokens - cachedTokens, 0);
-  const promptCost = (promptTokens / TOKENS_PER_PRICE_UNIT) * promptPrice;
-  const completionCost = (completionTokens / TOKENS_PER_PRICE_UNIT) * completionPrice;
-  const cachedCost = (cachedTokens / TOKENS_PER_PRICE_UNIT) * (Number(price.cache) || 0);
-  const total = promptCost + cachedCost + completionCost;
+  const serviceTier = detail.service_tier ?? detail.serviceTier;
+  const multiplier = getServiceTierMultiplier(pricedModel, serviceTier);
+  const total = standardCost * multiplier;
   return Number.isFinite(total) && total > 0 ? total : 0;
 }
 
@@ -663,8 +715,24 @@ export function formatCompactNumber(value: number): string {
 
   const abs = Math.abs(num);
   if (abs === 0) return '0';
-  if (abs >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
-  if (abs >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
+  const units = [
+    { threshold: 1_000_000_000_000_000, suffix: 'P' },
+    { threshold: 1_000_000_000_000, suffix: 'T' },
+    { threshold: 1_000_000_000, suffix: 'B' },
+    { threshold: 1_000_000, suffix: 'M' },
+    { threshold: 1_000, suffix: 'K' },
+  ];
+  const unit = units.find((item) => abs >= item.threshold);
+
+  if (unit) {
+    const formatted = (num / unit.threshold).toFixed(1);
+    const nextUnit = units[units.indexOf(unit) - 1];
+    if (nextUnit && Math.abs(Number(formatted)) >= 1000) {
+      return `${(num / nextUnit.threshold).toFixed(1)}${nextUnit.suffix}`;
+    }
+    return `${formatted}${unit.suffix}`;
+  }
+
   return abs >= 1 ? num.toFixed(0) : num.toFixed(2);
 }
 

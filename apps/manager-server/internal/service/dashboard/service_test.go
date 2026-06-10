@@ -196,6 +196,59 @@ func TestSummaryUsesResolvedModelPricing(t *testing.T) {
 	}
 }
 
+func TestSummaryPricesPriorityAndDefaultServiceTiersSeparately(t *testing.T) {
+	db := newDashboardTestStore(t)
+	ctx := context.Background()
+	todayStart := int64(1_778_010_000_000)
+	nowMS := todayStart + 60*60*1000
+
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"gpt-5.4": {Prompt: 2.5},
+	}); err != nil {
+		t.Fatalf("save prices: %v", err)
+	}
+	latency100 := int64(100)
+	latency200 := int64(200)
+	latency1000 := int64(1000)
+	standard := dashboardEvent("dashboard-tier-default", todayStart+1_000, "gpt-5.4", false, 1_000_000, 0, 0, 0, 0, 1_000_000, &latency100)
+	standard.ServiceTier = "default"
+	standardSecond := dashboardEvent("dashboard-tier-default-second", todayStart+1_500, "gpt-5.4", false, 0, 0, 0, 0, 0, 0, &latency200)
+	standardSecond.ServiceTier = "default"
+	priority := dashboardEvent("dashboard-tier-priority", todayStart+2_000, "gpt-5.4", false, 1_000_000, 0, 0, 0, 0, 1_000_000, &latency1000)
+	priority.ServiceTier = "priority"
+	if _, err := db.InsertEvents(ctx, []usage.Event{standard, standardSecond, priority}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Summary(ctx, SummaryParams{
+		TodayStartMS:   todayStart,
+		NowMS:          nowMS,
+		TopModels:      5,
+		RecentFailures: 1,
+	})
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+
+	if math.Abs(resp.Today.TotalCost-7.5) > 0.000001 {
+		t.Fatalf("today cost = %v, want 7.5", resp.Today.TotalCost)
+	}
+	if len(resp.TopModelsToday) != 1 || resp.TopModelsToday[0].Calls != 3 ||
+		math.Abs(resp.TopModelsToday[0].Cost-7.5) > 0.000001 {
+		t.Fatalf("top models = %#v", resp.TopModelsToday)
+	}
+	if len(resp.ModelCostRank) != 1 || math.Abs(resp.ModelCostRank[0].Cost-7.5) > 0.000001 {
+		t.Fatalf("model cost rank = %#v", resp.ModelCostRank)
+	}
+	if len(resp.ChannelHealth) != 1 || math.Abs(resp.ChannelHealth[0].Cost-7.5) > 0.000001 {
+		t.Fatalf("channel health = %#v", resp.ChannelHealth)
+	}
+	if resp.ChannelHealth[0].AverageLatencyMS == nil ||
+		math.Abs(*resp.ChannelHealth[0].AverageLatencyMS-(1300.0/3.0)) > 0.000001 {
+		t.Fatalf("channel health latency = %#v, want weighted 433.333333", resp.ChannelHealth[0].AverageLatencyMS)
+	}
+}
+
 func newDashboardTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))

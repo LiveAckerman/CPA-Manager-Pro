@@ -76,9 +76,6 @@ func (s *Service) Update(ctx context.Context, submitted store.ManagerConfig) (Re
 	if source == SourceEnv && ManagerConfigConnectionDiffers(current, next) {
 		return Response{}, errors.New("connection setup is managed by environment variables")
 	}
-	if source == SourceDB && ManagerConfigCPABindingDiffers(current, next) {
-		return Response{}, errors.New("CPA connection is already bound; reset Manager Server setup before rebinding")
-	}
 	if next.CPAConnection.CPABaseURL != "" || next.CPAConnection.ManagementKey != "" {
 		if next.CPAConnection.CPABaseURL == "" || next.CPAConnection.ManagementKey == "" {
 			return Response{}, errors.New("cpaBaseUrl and managementKey are required")

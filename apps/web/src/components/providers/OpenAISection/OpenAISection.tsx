@@ -23,16 +23,18 @@ import styles from '@/features/aiProviders/AiProvidersPage.module.scss';
 import { ProviderStatusBar } from '../ProviderStatusBar';
 import { usePageTransitionLayer } from '@/components/common/PageTransitionLayer';
 import {
-  getOpenAIProviderRecentWindowStats,
   getOpenAIProviderRecentStatusData,
   getOpenAIProviderTotalStats,
   getOpenAIProviderKey,
   getProviderTotalStats,
   type ProviderRecentUsageMap,
 } from '../utils';
-
-type SortOption = 'name' | 'priority' | 'recent-success';
-type SortDirection = 'asc' | 'desc';
+import {
+  sortOpenAIProviders,
+  type IndexedOpenAIProvider,
+  type OpenAIProviderSortDirection as SortDirection,
+  type OpenAIProviderSortOption as SortOption,
+} from './sort';
 
 interface FloatingToolbarStyle {
   left: number;
@@ -55,11 +57,6 @@ interface OpenAISectionProps {
   onDelete: (index: number) => void;
   onToggle: (index: number, enabled: boolean) => void;
   onTest?: (index: number) => void;
-}
-
-interface IndexedOpenAIProvider {
-  config: OpenAIProviderConfig;
-  originalIndex: number;
 }
 
 const getApiKeyEntryRenderKey = (
@@ -89,7 +86,7 @@ export function OpenAISection({
   const actionsDisabled = disableControls || loading || isSwitching;
   const toggleDisabled = disableControls || loading || isSwitching;
   const [sortOption, setSortOption] = useState<SortOption>('priority');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [dropdownLayout, setDropdownLayout] = useState({ openAbove: false, maxHeight: 300 });
@@ -272,59 +269,12 @@ export function OpenAISection({
   );
 
   const sortedConfigs = useMemo<IndexedOpenAIProvider[]>(() => {
-    const indexed = configs.map((config, originalIndex) => ({ config, originalIndex }));
-    const filtered = indexed.filter(({ config }) => {
-      if (selectedModels.size === 0) return true;
-      return config.models?.some((model) => selectedModels.has(model.name));
+    return sortOpenAIProviders(configs, {
+      sortOption,
+      sortDirection,
+      usageByProvider,
+      selectedModels,
     });
-
-    const sorted = [...filtered];
-    const direction = sortDirection === 'desc' ? -1 : 1;
-    const providerStats =
-      sortOption === 'recent-success'
-        ? new Map(
-            sorted.map(({ config }) => [
-              config,
-              getOpenAIProviderRecentWindowStats(config, usageByProvider),
-            ])
-          )
-        : null;
-
-    switch (sortOption) {
-      case 'name':
-        sorted.sort((a, b) => direction * a.config.name.localeCompare(b.config.name));
-        break;
-      case 'priority':
-        sorted.sort((a, b) => {
-          const priorityA = a.config.priority ?? Number.MAX_SAFE_INTEGER;
-          const priorityB = b.config.priority ?? Number.MAX_SAFE_INTEGER;
-          const priorityDiff = priorityA - priorityB;
-
-          if (priorityDiff !== 0) {
-            return direction * priorityDiff;
-          }
-
-          return direction * a.config.name.localeCompare(b.config.name);
-        });
-        break;
-      case 'recent-success':
-        sorted.sort((a, b) => {
-          const successDiff =
-            (providerStats?.get(a.config)?.success ?? 0) -
-            (providerStats?.get(b.config)?.success ?? 0);
-
-          if (successDiff !== 0) {
-            return direction * successDiff;
-          }
-
-          return direction * a.config.name.localeCompare(b.config.name);
-        });
-        break;
-      default:
-        break;
-    }
-
-    return sorted;
   }, [configs, sortOption, sortDirection, usageByProvider, selectedModels]);
 
   const toggleModelSelection = (modelName: string) => {

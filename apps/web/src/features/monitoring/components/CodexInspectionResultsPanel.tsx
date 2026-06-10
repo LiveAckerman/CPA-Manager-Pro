@@ -1,5 +1,6 @@
 import type { TFunction } from 'i18next';
 import { Button } from '@/components/ui/Button';
+import { Select } from '@/components/ui/Select';
 import {
   type CodexInspectionAction,
   type CodexInspectionResultItem,
@@ -8,6 +9,7 @@ import {
 } from '@/features/monitoring/codexInspection';
 import {
   ACTION_FILTERS,
+  type CodexInspectionPaginationState,
   formatActionLabel,
   formatCurrentStateLabel,
   formatPercent,
@@ -23,10 +25,15 @@ type CodexInspectionResultsPanelProps = {
   pendingActionCount: number;
   filterCounts: Record<ActionFilter, number>;
   actionFilter: ActionFilter;
+  pagination: CodexInspectionPaginationState<CodexInspectionResultItem>;
+  pageSize: number;
+  pageSizeOptions: readonly number[];
   executing: boolean;
   isInspectionInFlight: boolean;
   t: TFunction;
   onActionFilterChange: (filter: ActionFilter) => void;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (pageSize: number) => void;
   onExecutePlanned: () => void;
   onExecuteSingle: (item: CodexInspectionResultItem) => void;
   filterLabel: (filter: ActionFilter) => string;
@@ -47,10 +54,15 @@ export function CodexInspectionResultsPanel({
   pendingActionCount,
   filterCounts,
   actionFilter,
+  pagination,
+  pageSize,
+  pageSizeOptions,
   executing,
   isInspectionInFlight,
   t,
   onActionFilterChange,
+  onPageChange,
+  onPageSizeChange,
   onExecutePlanned,
   onExecuteSingle,
   filterLabel,
@@ -188,6 +200,57 @@ export function CodexInspectionResultsPanel({
               </tbody>
             </table>
           </div>
+          {pagination.totalPages > 1 ? (
+            <div className={styles.resultPaginationBar}>
+              <div className={styles.resultPaginationInfo}>
+                {t('monitoring.pagination_info', {
+                  current: pagination.currentPage,
+                  total: pagination.totalPages,
+                  start: pagination.startItem,
+                  end: pagination.endItem,
+                  count: pagination.count,
+                })}
+              </div>
+              <div className={styles.resultPaginationControls}>
+                <div className={styles.resultPageSizeField}>
+                  <span>{t('monitoring.page_size_label')}</span>
+                  <Select
+                    className={styles.resultPageSizeSelect}
+                    triggerClassName={styles.resultPageSizeSelectTrigger}
+                    value={String(pageSize)}
+                    options={pageSizeOptions.map((size) => ({
+                      value: String(size),
+                      label: t('monitoring.page_size_option', { count: size }),
+                    }))}
+                    onChange={(value) => {
+                      const parsed = Number.parseInt(value, 10);
+                      onPageSizeChange(Number.isFinite(parsed) && parsed > 0 ? parsed : pageSize);
+                    }}
+                    ariaLabel={t('monitoring.page_size_label')}
+                    fullWidth={false}
+                  />
+                </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => onPageChange(Math.max(1, pagination.currentPage - 1))}
+                  disabled={pagination.currentPage <= 1}
+                >
+                  {t('monitoring.pagination_prev')}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() =>
+                    onPageChange(Math.min(pagination.totalPages, pagination.currentPage + 1))
+                  }
+                  disabled={pagination.currentPage >= pagination.totalPages}
+                >
+                  {t('monitoring.pagination_next')}
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </>
       ) : (
         <div className={styles.emptyBlock}>{t('monitoring.codex_inspection_empty')}</div>

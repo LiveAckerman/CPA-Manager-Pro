@@ -75,6 +75,18 @@ type CodexInspectionDecision = Pick<
 
 type UnauthorizedReason = 'unknown' | 'expired' | 'invalidated';
 
+const isDeactivatedWorkspaceResponse = (statusCode: number, bodyText: string): boolean =>
+  statusCode === 402 && bodyText.toLowerCase().includes('deactivated_workspace');
+
+const resolveDeactivatedWorkspaceProbeAction = (
+  usedPercent: number | null
+): CodexInspectionDecision => ({
+  action: 'delete',
+  actionReason: '接口返回 402，工作区已停用，建议删除账号',
+  usedPercent,
+  isQuota: false,
+});
+
 const classifyUnauthorizedReason = (bodyText: string): UnauthorizedReason => {
   const normalized = bodyText.trim().toLowerCase();
   if (
@@ -245,6 +257,10 @@ const resolveProbeAction = (
   isQuota: boolean,
   threshold: number
 ): CodexInspectionDecision => {
+  if (isDeactivatedWorkspaceResponse(statusCode, bodyText)) {
+    return resolveDeactivatedWorkspaceProbeAction(usedPercent);
+  }
+
   const windowAwareDecision = resolveWindowAwareProbeAction(
     account,
     statusCode,
