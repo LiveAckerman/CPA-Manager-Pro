@@ -38,7 +38,7 @@ export interface ProviderTestAuth {
 }
 
 export type TestRequestResult =
-  | { request: ApiCallRequest }
+  | { request: ApiCallRequest; expectText: boolean }
   | { unsupported: true; reason: 'unsaved' | 'no-endpoint' };
 
 export type TestOutcomeKind =
@@ -46,6 +46,7 @@ export type TestOutcomeKind =
   | 'unauthorized'
   | 'rate_limited'
   | 'upstream_error'
+  | 'bad_response'
   | 'failed';
 
 export interface TestOutcome {
@@ -102,6 +103,7 @@ function openAICompatibleRequest(
     header.Authorization = `Bearer ${resolved.token}`;
   }
   return {
+    expectText: true,
     request: {
       method: 'POST',
       authIndex: resolved.authIndex,
@@ -144,6 +146,7 @@ export function buildTestRequest(
       if (!hasHeader(header, 'anthropic-version')) header['anthropic-version'] = DEFAULT_ANTHROPIC_VERSION;
       if (!hasHeader(header, 'x-api-key')) header['x-api-key'] = resolved.token;
       return {
+        expectText: true,
         request: {
           method: 'POST',
           authIndex: resolved.authIndex,
@@ -168,6 +171,7 @@ export function buildTestRequest(
       const header: Record<string, string> = { 'Content-Type': 'application/json', ...(auth.headers ?? {}) };
       if (!hasHeader(header, 'x-goog-api-key')) header['x-goog-api-key'] = resolved.token;
       return {
+        expectText: true,
         request: {
           method: 'POST',
           authIndex: resolved.authIndex,
@@ -188,10 +192,13 @@ export function buildTestRequest(
         return openAICompatibleRequest(auth, model);
       }
       // OAuth codex account → reuse the safe codex usage probe (saved only).
+      // The usage endpoint returns JSON usage data, not an assistant reply, so
+      // a 2xx alone means the account is reachable.
       if (!resolved.authIndex) return { unsupported: true, reason: 'unsaved' };
       const header: Record<string, string> = { ...(auth.headers ?? {}) };
       if (!hasHeader(header, 'authorization')) header.Authorization = 'Bearer $TOKEN$';
       return {
+        expectText: false,
         request: { method: 'GET', authIndex: resolved.authIndex, url: CODEX_USAGE_URL, header },
       };
     }
@@ -201,13 +208,76 @@ export function buildTestRequest(
   }
 }
 
-/** Map a real `/api-call` result to a friendly outcome for the modal. */
-export function classifyResult(result: ApiCallResult): TestOutcome {
+/**
+ * Pull the assistant's reply text out of a model response, trying every known
+ * shape (OpenAI chat, Claude messages, Responses API, Gemini). Returns null if
+ * none matches — e.g. the body is an HTML page, an error envelope, or anything
+ * that isn't a real model reply.
+ */
+export function extractAssistantText(body: unknown): string | null {
+  if (!body || typeof body !== 'object') return null;
+  const b = body as Record<string, any>;
+  const join = (parts: any): string =>
+    Array.isArray(parts) ? parts.map((p) => (typeof p?.text === 'string' ? p.text : '')).join('') : '';
+
+  // OpenAI chat completions
+  const choice = Array.isArray(b.choices) ? b.choices[0] : undefined;
+  if (choice) {
+    const c = choice.message?.content ?? choice.text ?? choice.delta?.content;
+    if (typeof c === 'string' && c) return c;
+    const joined = join(c);
+    if (joined) return joined;
+  }
+  // Claude /v1/messages
+  if (Array.isArray(b.content)) {
+    const text = join(b.content);
+    if (text) return text;
+  }
+  // Responses API
+  if (typeof b.output_text === 'string' && b.output_text) return b.output_text;
+  if (Array.isArray(b.output)) {
+    const text = b.output.flatMap((o: any) => o?.content ?? []).map((p: any) => p?.text ?? '').join('');
+    if (text) return text;
+  }
+  // Gemini generateContent
+  const cand = Array.isArray(b.candidates) ? b.candidates[0] : undefined;
+  if (cand) {
+    const text = join(cand.content?.parts);
+    if (text) return text;
+  }
+  return null;
+}
+
+const looksLikeHtml = (text: string): boolean =>
+  /^\s*(?:<!doctype html|<html|<head|<body|<!--)/i.test(text);
+
+/**
+ * Map a real `/api-call` result to a friendly outcome for the modal.
+ * `expectText` = the test should yield an assistant reply (chat-style). A 2xx
+ * that carries no model reply (HTML challenge page, login redirect, wrong
+ * endpoint) is treated as a FAILURE, not a success.
+ */
+export function classifyResult(result: ApiCallResult, expectText: boolean): TestOutcome {
   const code = result.statusCode;
-  const detail = (result.bodyText || '').slice(0, 1200);
+  const bodyText = result.bodyText || '';
 
   if (result.hasStatusCode && code >= 200 && code < 300) {
-    return { status: 'success', httpStatus: code, kind: 'success', error: '', detail };
+    if (!expectText) {
+      // Usage probe etc. — reachable 2xx is success; no reply expected.
+      return { status: 'success', httpStatus: code, kind: 'success', error: '', detail: '' };
+    }
+    const reply = extractAssistantText(result.body);
+    if (reply && reply.trim()) {
+      return { status: 'success', httpStatus: code, kind: 'success', error: '', detail: reply.trim().slice(0, 1200) };
+    }
+    // 2xx but no model reply → not a real success.
+    return {
+      status: 'error',
+      httpStatus: code,
+      kind: 'bad_response',
+      error: looksLikeHtml(bodyText) ? 'html' : 'no-reply',
+      detail: bodyText.slice(0, 400),
+    };
   }
 
   let kind: TestOutcomeKind = 'failed';
@@ -220,6 +290,6 @@ export function classifyResult(result: ApiCallResult): TestOutcome {
     httpStatus: code,
     kind,
     error: getApiCallErrorMessage(result),
-    detail,
+    detail: bodyText.slice(0, 400),
   };
 }

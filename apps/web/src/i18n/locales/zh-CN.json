@@ -473,6 +473,7 @@
     "provider_test_unauthorized": "鉴权失败（密钥或令牌无效）",
     "provider_test_rate_limited": "被限流或配额用尽",
     "provider_test_upstream_error": "上游服务错误",
+    "provider_test_bad_response": "返回了非模型响应(可能是 HTML 页面 / 挑战页 / 错误页)",
     "provider_test_timeout": "测试请求超时（{{seconds}}秒）",
     "provider_test_no_model": "请先选择或填写要测试的模型",
     "provider_test_no_auth": "缺少可用的鉴权信息",

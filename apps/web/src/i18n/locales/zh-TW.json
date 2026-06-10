@@ -472,6 +472,7 @@
     "provider_test_unauthorized": "鑑權失敗（金鑰或權杖無效）",
     "provider_test_rate_limited": "被限流或配額用盡",
     "provider_test_upstream_error": "上游服務錯誤",
+    "provider_test_bad_response": "返回了非模型回應(可能是 HTML 頁面 / 挑戰頁 / 錯誤頁)",
     "provider_test_timeout": "測試請求逾時（{{seconds}}秒）",
     "provider_test_no_model": "請先選擇或填寫要測試的模型",
     "provider_test_no_auth": "缺少可用的鑑權資訊",

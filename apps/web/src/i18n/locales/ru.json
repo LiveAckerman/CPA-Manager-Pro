@@ -472,6 +472,7 @@
     "provider_test_unauthorized": "Ошибка авторизации (неверный ключ или токен)",
     "provider_test_rate_limited": "Превышен лимит или квота",
     "provider_test_upstream_error": "Ошибка вышестоящего сервиса",
+    "provider_test_bad_response": "Получен не модельный ответ (вероятно, HTML / страница проверки / ошибки)",
     "provider_test_timeout": "Тайм-аут запроса ({{seconds}}с)",
     "provider_test_no_model": "Сначала выберите или введите модель",
     "provider_test_no_auth": "Нет доступных учётных данных",

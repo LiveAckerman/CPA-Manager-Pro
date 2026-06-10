@@ -473,6 +473,7 @@
     "provider_test_unauthorized": "Auth failed (invalid key or token)",
     "provider_test_rate_limited": "Rate-limited or quota exhausted",
     "provider_test_upstream_error": "Upstream error",
+    "provider_test_bad_response": "Returned a non-model response (likely an HTML / challenge / error page)",
     "provider_test_timeout": "Test request timed out ({{seconds}}s)",
     "provider_test_no_model": "Select or enter a model to test first",
     "provider_test_no_auth": "No usable credentials",

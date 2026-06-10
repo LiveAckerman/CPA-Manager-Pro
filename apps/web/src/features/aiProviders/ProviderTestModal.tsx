@@ -39,7 +39,7 @@ export interface ProviderTestModalProps {
   authOptions: ProviderTestAuthOption[];
 }
 
-type LineKind = 'req' | 'ok' | 'err' | 'info';
+type LineKind = 'req' | 'ok' | 'err' | 'info' | 'reply';
 interface OutputLine {
   kind: LineKind;
   text: string;
@@ -130,24 +130,31 @@ export function ProviderTestModal({
     try {
       const result = await apiCallApi.request(built.request, { timeout: PROVIDER_TEST_TIMEOUT_MS });
       if (runId !== runIdRef.current) return;
-      const outcome = classifyResult(result);
+      const outcome = classifyResult(result, built.expectText);
       const next: OutputLine[] = [{ kind: 'req', text: `→ ${built.request.method} ${built.request.url}` }];
       if (outcome.status === 'success') {
         next.push({ kind: 'ok', text: `✓ HTTP ${outcome.httpStatus} · ${t('ai_providers.provider_test_success')}` });
+        // Show only the assistant reply, not the raw JSON.
+        if (outcome.detail) next.push({ kind: 'reply', text: outcome.detail });
       } else {
         const kindKey: Record<string, string> = {
           unauthorized: 'ai_providers.provider_test_unauthorized',
           rate_limited: 'ai_providers.provider_test_rate_limited',
           upstream_error: 'ai_providers.provider_test_upstream_error',
+          bad_response: 'ai_providers.provider_test_bad_response',
           failed: 'ai_providers.provider_test_failed',
         };
         next.push({
           kind: 'err',
           text: `✗ HTTP ${outcome.httpStatus || '-'} · ${t(kindKey[outcome.kind])}`,
         });
-        if (outcome.error) next.push({ kind: 'err', text: outcome.error });
+        // 'html'/'no-reply' are internal codes for bad_response — don't echo them.
+        if (outcome.kind !== 'bad_response' && outcome.error) {
+          next.push({ kind: 'err', text: outcome.error });
+        }
+        // For failures, a short raw-body snippet helps diagnose.
+        if (outcome.detail) next.push({ kind: 'info', text: outcome.detail });
       }
-      if (outcome.detail) next.push({ kind: 'info', text: outcome.detail });
       setLines(next);
     } catch (err: unknown) {
       if (runId !== runIdRef.current) return;
